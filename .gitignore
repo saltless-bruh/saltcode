@@ -1,0 +1,52 @@
+# Python build/cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE / Editor config
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing and coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+htmlcov/
+.tox/
+.nosetests/
+.coverage
+.coverage.*
+.hypothesis/
+
+# Saltcode caches and dynamic workspace files
+.saltcode/cache/
+.saltcode/calibration/
+workspace/**/.saltcode/cache/
