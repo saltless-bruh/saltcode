@@ -31,6 +31,7 @@ env/
 # IDE / Editor config
 .idea/
 .vscode/
+.claude/settings.local.json
 *.swp
 *.swo
 
