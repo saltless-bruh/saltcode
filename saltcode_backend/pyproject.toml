@@ -1,21 +1,26 @@
 [project]
-name = "saltcode"
+name = "saltcode-backend"
 version = "0.1.0"
-description = "Pi-Optimized AI-Driven Coding Framework"
+description = "Saltcode backend — typed contracts, gates, sandbox, caches and stability for the Saltcode Pi Package"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
     "pydantic>=2.0",
     "lancedb>=0.12.0",
+    "pyarrow>=15.0.0",
     "mcp>=0.1.0",
-    "openai>=1.0.0",
     "httpx>=0.25.0",
-    "typer>=0.9.0",
-    "rich>=13.0.0",
     "json-repair>=0.25.0",
-    "networkx>=3.0"
+    # Needed by contracts/tasks.py for the depends_on acyclicity check
+    # (REQ-CON-003 AC2, REQ-PLN-002 AC1). Task 0.1's dependency list omits it —
+    # see "Dependency notes" in README.md.
+    "networkx>=3.0",
 ]
+
+# Dropped in v9: typer / rich / textual (Pi owns the UI, REQ-EXT-008) and the
+# `openai` SDK (providers/local.py speaks OpenAI-compatible HTTP over httpx
+# directly, so the SDK was never imported).
 
 [project.optional-dependencies]
 dev = [
@@ -23,16 +28,24 @@ dev = [
     "ruff>=0.3.0",
     "pyright>=1.1.350"
 ]
-tui = [
-    "textual>=0.50.0"
-]
 
 [build-system]
 requires = ["setuptools>=61.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["saltcode"]
+packages = [
+    "saltcode",
+    "saltcode.contracts",
+    "saltcode.diffs",
+    "saltcode.harness",
+    "saltcode.mcp",
+    "saltcode.memory",
+    "saltcode.providers",
+    "saltcode.static_gate",
+    "saltcode.stability",
+    "saltcode.tools",
+]
 
 [tool.ruff]
 line-length = 120
@@ -40,7 +53,7 @@ target-version = "py311"
 # tests/fixtures is a sample target repo used as LSP/AST test *data*, not Saltcode
 # source. Its exact layout is asserted on (tests/test_task_4.py checks symbol line
 # numbers), so reformatting it would break the suite.
-exclude = [".agents", "workspace", ".venv", "tests/fixtures"]
+exclude = [".venv", "tests/fixtures"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "RET", "SIM", "ARG"]
@@ -54,11 +67,12 @@ ignore = []
 
 [tool.pyright]
 include = ["saltcode"]
-exclude = ["**/node_modules", "**/__pycache__", "workspace"]
+exclude = ["**/node_modules", "**/__pycache__"]
 typeCheckingMode = "strict"
 pythonVersion = "3.11"
 useLibraryCodeForTypes = true
 reportMissingImports = true
 reportMissingTypeStubs = false
-venvPath = "."
+# The virtualenv lives at the repository root, one level above this package.
+venvPath = ".."
 venv = ".venv"

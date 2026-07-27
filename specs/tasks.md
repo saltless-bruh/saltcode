@@ -17,13 +17,14 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 > Most of this code already exists (the maintainer is at ~Task 6 of the standalone build). The v9 work here is (a) keep the modules, (b) remove the in-backend agent-LLM client and orchestration primitives that moved to the extension, and (c) add a `saltcode.tools.*` CLI entrypoint per capability.
 
 ## Task 0 — Scaffold: Pi Package + Python backend  ·  deps: none  ·  [CHANGED]
-- [ ] 0.1 Create the **Python backend** (`saltcode_backend/pyproject.toml`), package layout per design §17, `README` stub. Dev tooling: `ruff`, `pyright --strict`, `pytest`; runtime deps `pydantic>=2`, `lancedb`, `mcp`, `httpx` (drop `typer`/`rich`/`textual` — Pi owns the UI; keep `openai`/`httpx` only for the local Saltnitor client used by stability).
-- [ ] 0.2 Create the **Pi Package** root: `package.json` with `"keywords":["pi-package"]` and `"pi":{ "extensions":["./extensions"], "skills":["./skills"], "prompts":["./prompts"] }`; declare `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-tui`, `typebox` in `peerDependencies` as `"*"`. Add `extensions/` and `prompts/` stubs; `skills/` already populated.
-- [ ] 0.3 TS tooling: `tsconfig.json`, a linter/formatter (e.g. biome), and a type-check step (`tsc --noEmit`). Pi loads `.ts` via jiti — no build step needed at runtime, but type-checking gates CI.
-- [ ] 0.4 CI: run `ruff` + `pyright --strict` + `pytest` (backend) and `tsc --noEmit` + lint (extension) on every commit.
-- [ ] 0.5 Per-project workspace convention: `workspace/<project>/.saltcode/{tests/,cache/,calibration/}`.
+- [x] 0.1 Create the **Python backend** (`saltcode_backend/pyproject.toml`), package layout per design §17, `README` stub. Dev tooling: `ruff`, `pyright --strict`, `pytest`; runtime deps `pydantic>=2`, `lancedb`, `mcp`, `httpx` (drop `typer`/`rich`/`textual` — Pi owns the UI; keep `openai`/`httpx` only for the local Saltnitor client used by stability).
+- [x] 0.2 Create the **Pi Package** root: `package.json` with `"keywords":["pi-package"]` and `"pi":{ "extensions":["./extensions"], "skills":["./skills"], "prompts":["./prompts"] }`; declare `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-tui`, `typebox` in `peerDependencies` as `"*"`. Add `extensions/` and `prompts/` stubs; `skills/` already populated.
+- [x] 0.3 TS tooling: `tsconfig.json`, a linter/formatter (e.g. biome), and a type-check step (`tsc --noEmit`). Pi loads `.ts` via jiti — no build step needed at runtime, but type-checking gates CI.
+- [x] 0.4 CI: run `ruff` + `pyright --strict` + `pytest` (backend) and `tsc --noEmit` + lint (extension) on every commit.
+- [x] 0.5 Per-project workspace convention: `workspace/<project>/.saltcode/{tests/,cache/,calibration/}`.
 - **Satisfies:** REQ-EXT-001, REQ-GLB-001 (layout), REQ-MEM-002.
 - **Done when:** backend CI green on an empty skeleton; `pi install -l .` loads the package (extension + skills + prompts visible in `pi config`); `tsc --noEmit` passes on the extension stub.
+- **Verification (2026-07-27):** backend green (`ruff` clean, `pyright --strict` 0 errors, 43 tests pass) ✓ · `tsc --noEmit` clean and `biome check` clean ✓ · **`pi install -l .` NOT verified** — Pi is not installed on this machine. Re-run that leg before treating Task 0 as fully closed. Deviations: `skills/` is an empty placeholder (Task 7.1 populates it, contrary to "already populated"), and `networkx` is retained as a backend dependency (see `saltcode_backend/README.md` → Dependency notes).
 
 ## Task 1 — Typed contracts & Output-Length Enforcer (+ entrypoints)  ·  deps: 0  ·  [KEEP]
 - [ ] 1.1 pydantic models: `ContextReport`, `Task`/`TasksFile`, `EvaluatorReport`, `AuditResult` (with `stability`), `schema_version` on each.

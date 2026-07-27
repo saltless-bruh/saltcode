@@ -42,8 +42,10 @@ docs/proposal/     # ← SOURCE OF TRUTH (v8 framework + v9 Pi addendum)
 docs/developer_handbook.md   # implementation cookbook (LSP JSON-RPC, LanceDB, sandbox recipes)
 specs/             # requirements.md · design.md · tasks.md  (v9, canonical)
 specs/legacy/      # pre-v9 standalone spec set (archived, non-authoritative)
-saltcode/          # Python backend — contracts, harness, mcp, memory, providers, diffs
-tests/             # backend pytest suite + tests/fixtures/sample_project
+package.json       # Pi Package manifest · extensions/ prompts/ skills/ agents/
+extensions/        # THE BRIDGE — TypeScript (stub until Task 13)
+saltcode_backend/  # THE MUSCLE — Python: saltcode/ + tests/ + its own pyproject.toml
+workspace/         # target projects Saltcode operates on
 .claude/           # rules, commands, skills  (this configuration)
 .agents/           # the same assets in Antigravity's format — a separate tool's config
 ```
@@ -53,16 +55,25 @@ tests/             # backend pytest suite + tests/fixtures/sample_project
 - **Done:** legacy Tasks 0–5 — contracts + enforcer + diff validator, providers +
   embeddings + connectivity, harness primitives, LSP/AST MCP + broker, LanceDB
   memory. 43 tests green.
-- **Next:** the v9 build in `specs/tasks.md` — Track A (backend `saltcode.tools.*`
-  entrypoints, daemon, checkpoints), Track B (the TypeScript extension), Track C
-  (integration). Build order is at the bottom of `specs/tasks.md`.
+- **Done:** v9 **Task 0** — repo restructured as a Pi Package: backend moved to
+  `saltcode_backend/` with its own `pyproject.toml`, `package.json` manifest,
+  `extensions/saltcode.ts` stub, tsconfig + biome, two-lane CI, workspace convention.
+  One leg of its gate is unverified: `pi install -l .` (Pi is not installed here).
+- **Next:** Track A continues at Task 1 (contracts already exist — add the
+  `saltcode.tools.*` entrypoints), and Track B starts at Task 7 (sub-agent
+  definitions). Build order is at the bottom of `specs/tasks.md`.
 - **Migration note:** under v9 several existing modules move out of the backend into
-  the extension — `harness/{dag,budget,thinking_gate,phase_gate,router,ctx_compactor,
-  write_allowlist}.py` and `providers/deepseek.py`. Do not extend them; port them.
+  the extension — `saltcode_backend/saltcode/harness/{dag,budget,thinking_gate,
+  phase_gate,router,ctx_compactor,write_allowlist}.py` and `providers/deepseek.py`.
+  Do not extend them; port them.
 
 ## Commands
 
-`ruff check .` · `pyright` · `.venv/bin/python -m pytest -q`
+Backend (from `saltcode_backend/`): `ruff check .` · `pyright` · `pytest -q`
+Extension (from the repo root): `npm run typecheck` · `npm run lint`
+
+The virtualenv lives at the repo root, so from `saltcode_backend/` use
+`../.venv/bin/<tool>`. Both lanes gate CI.
 
 ## Rules
 

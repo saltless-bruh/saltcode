@@ -28,9 +28,13 @@ venv/
 ENV/
 env/
 
+# Node / Pi Package toolchain
+node_modules/
+
 # IDE / Editor config
 .idea/
 .vscode/
+.obsidian/
 .claude/settings.local.json
 *.swp
 *.swo
@@ -49,6 +53,11 @@ htmlcov/
 .hypothesis/
 
 # Saltcode caches and dynamic workspace files
+# Per-project convention: workspace/<project>/.saltcode/{tests/,cache/,calibration/}
+# tests/ holds Test-Intent specs and is tracked; cache/ and calibration/ are generated.
 .saltcode/cache/
 .saltcode/calibration/
+.saltcode/audit_log.jsonl
+.saltcode/dry_run_log.txt
 workspace/**/.saltcode/cache/
+workspace/**/.saltcode/calibration/
