@@ -23,21 +23,23 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 - [x] 0.4 CI: run `ruff` + `pyright --strict` + `pytest` (backend) and `tsc --noEmit` + lint (extension) on every commit.
 - [x] 0.5 Per-project workspace convention: `workspace/<project>/.saltcode/{tests/,cache/,calibration/}`.
 - **Satisfies:** REQ-EXT-001, REQ-GLB-001 (layout), REQ-MEM-002.
-- **Done when:** backend CI green on an empty skeleton; `pi install -l .` loads the package (extension + skills + prompts visible in `pi config`); `tsc --noEmit` passes on the extension stub.
-- **Verification (2026-07-28, Pi 0.82.1):** backend green (`ruff` clean, `pyright --strict` 0 errors, 43 tests pass) ✓ · `tsc --noEmit` clean, `biome check` clean ✓ · `pi install -l .` succeeds; `pi list` shows the project package; `pi config` lists `.. (project) → Extensions → [x] saltcode.ts` ✓ · **skills + prompts NOT visible** — `skills/` and `prompts/` are empty, so Pi renders no group for them. See the gate defect noted below.
-- **⚠ Gate defect (open):** this task's **Done when** requires "extension + skills + **prompts** visible in `pi config`", but 0.2 only creates a `prompts/` **stub** and assumes `skills/` is "already populated" when it is not — `skills/` is filled by **Task 7.1** and `prompts/` by **Task 13b.1**, both of which run after Task 0. As written the gate is unsatisfiable at Task 0. Awaiting a maintainer decision; do not mark Task 0 closed until it is resolved.
+- **Done when:** backend CI green on an empty skeleton; `pi install -l .` registers the package and the **extension** is visible in `pi config`; `tsc --noEmit` passes on the extension stub.
+  > *Gate narrowed 2026-07-28 (maintainer approved).* It previously also required skills + prompts visible in `pi config`, which Task 0 cannot produce: 0.2 creates only a `prompts/` **stub**, and `skills/` is filled by **Task 7.1**, `prompts/` by **Task 13b.1** — both of which run after Task 0. Those two assertions now live in the Done-when of the tasks that produce them.
+- **Verification (2026-07-28, Pi 0.82.1) — PASSED:** backend green (`ruff` clean, `pyright --strict` 0 errors, 43 tests pass) ✓ · `tsc --noEmit` clean, `biome check` clean ✓ · `pi install -l .` succeeds, `pi list` shows the project package, and `pi config` lists `.. (project) → Extensions → [x] saltcode.ts` ✓
 - **Deviations:** `networkx` retained as a backend dependency (see `saltcode_backend/README.md` → Dependency notes); `skills/` left as an empty placeholder for Task 7.1; root README rewritten (it documented a Typer CLI v9 drops). All three confirmed acceptable by the maintainer on 2026-07-28.
 
 ## Task 1 — Typed contracts & Output-Length Enforcer (+ entrypoints)  ·  deps: 0  ·  [KEEP]
-- [ ] 1.1 pydantic models: `ContextReport`, `Task`/`TasksFile`, `EvaluatorReport`, `AuditResult` (with `stability`), `schema_version` on each.
-- [ ] 1.2 `design_doc.py`: parse the `## HARD CONSTRAINTS` H2 block into a string set.
-- [ ] 1.3 `enforce.py`: validate model output → one bounded repair → else typed error; JSON-only/length guard.
-- [ ] 1.4 Readers/writers under `.saltcode/`, rejecting unknown major `schema_version`.
-- [ ] 1.5 `depends_on` acyclicity + dangling-reference validation.
-- [ ] 1.6 Unified-diff validator (`git apply --check`; one fenced-diff repair, else `impl_fail`).
-- [ ] 1.7 **Entrypoints:** `saltcode.tools.validate_contract`, `saltcode.tools.diff_check` (read args, print result + exit code).
+- [x] 1.1 pydantic models: `ContextReport`, `Task`/`TasksFile`, `EvaluatorReport`, `AuditResult` (with `stability`), `schema_version` on each.
+- [x] 1.2 `design_doc.py`: parse the `## HARD CONSTRAINTS` H2 block into a string set.
+- [x] 1.3 `enforce.py`: validate model output → one bounded repair → else typed error; JSON-only/length guard.
+- [x] 1.4 Readers/writers under `.saltcode/`, rejecting unknown major `schema_version`.
+- [x] 1.5 `depends_on` acyclicity + dangling-reference validation.
+- [x] 1.6 Unified-diff validator (`git apply --check`; one fenced-diff repair, else `impl_fail`).
+- [x] 1.7 **Entrypoints:** `saltcode.tools.validate_contract`, `saltcode.tools.diff_check` (read args, print result + exit code).
 - **Satisfies:** REQ-GLB-001/002/005, REQ-CON-001..006, REQ-PLN-002 (DAG), REQ-STAT-005, REQ-EXT-004.
 - **Done when:** unit tests prove valid samples load; each malformed sample is rejected with a typed error and **no file written**; a missing HARD CONSTRAINT is detectable; a cyclic `depends_on` fails; `stability` validates; a valid unified diff passes and raw-file output is rejected/repaired; both entrypoints return correct exit codes when run via subprocess.
+- **Verification (2026-07-28) — PASSED:** 62 tests green (43 pre-existing + 19 new in `tests/test_task_1_entrypoints.py`, all spawning the interpreter via subprocess); `ruff` clean; `pyright --strict` 0 errors. Every Done-when clause maps to a named test.
+- **Notes:** 1.1–1.5 carried over from the standalone build unchanged. **1.6 was incomplete** — `validate_diff` did a structural parse only and never ran `git apply --check`, which both the task and REQ-STAT-005 name; added as `diff_validator.git_apply_check`, reported as `skipped` (never as a pass) when git is absent or the target is not a repo. **Fixed a latent corruption bug** while doing so: `extract_diff_from_fences` called `.strip()`, which deletes a trailing space-only context line — the representation of a blank final source line — leaving the last hunk one line short and making `git apply` reject valid patches as `corrupt patch at line N`. Extraction is now byte-preserving from the first diff marker onward. This would also have broken sandbox apply (3.1) and `apply_live` (10.3). The entrypoint exit-code scheme (`0` valid · `1` negative verdict · `2` usage · `3` internal) is not fixed by the specs; it is documented in `saltcode/tools/_cli.py` as the convention Task 7b.2 consolidates.
 
 ## Task 2 — Backend providers (Saltnitor client + embeddings) & connectivity  ·  deps: 0  ·  [CHANGED]
 > Agent-facing provider management (DeepSeek/Qwen/Saltnitor) moves to the extension's `pi.registerProvider` (Task 11/13). The backend keeps only what its own tools need.
@@ -125,7 +127,7 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 - [ ] 7.3 Verify each agent's behavior matches its contract in an isolated spawn (Scout AST-only; Architect HARD CONSTRAINTS carry-through; Planner design.md-only; Test Intent project-config + framework; Evaluator four checks; Builder scoped/one-task).
 - [ ] 7.4 Author the 3 new skills (SKILL.md, valid `name`/`description`): `saltcode-lsp-usage` (symbols/outline before bodies, stay in `files_affected`, never emit raw source — preload for Scout + Builder), `saltcode-delegation` (agent selection, serial-when-dependent, complete zero-context task prompts), `saltcode-checkpoint-ops` (`/checkpoints`, `/rollback`, reading regression failures).
 - **Satisfies:** REQ-SCT/ARC/PLN/TST/EVL/BLD/AUD (behavioral), REQ-EXT-003, REQ-EXT-012, REQ-EXT-016.
-- **Done when:** all 14 base skills + 3 new skills load; each of the 6 sub-agent definitions spawns in an isolated context with its skill present in-prompt even when it lacks `read`, producing the expected behavior on the fixture repo with only its allowed tools; the routing table resolves a model + thinking level for every (agent, state).
+- **Done when:** all 14 base skills + 3 new skills load, and the package's **Skills are visible in `pi config`** under the project package (inherited from Task 0's gate, which cannot assert this because `skills/` is empty until 7.1 fills it); each of the 6 sub-agent definitions spawns in an isolated context with its skill present in-prompt even when it lacks `read`, producing the expected behavior on the fixture repo with only its allowed tools; the routing table resolves a model + thinking level for every (agent, state).
 
 ## Task 6 — Prefix assembly in `before_agent_start`  ·  deps: 5, 7, 13  ·  [CHANGED]
 - [ ] 6.1 In `before_agent_start`, assemble `[system(active agent) | design.md | frozen notes | per-call delta]`; return `{ systemPrompt, message }`. Read `event.systemPromptOptions` to respect user config. Pull frozen notes + design.md from the backend/Code-Wiki.
@@ -172,7 +174,7 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 - [ ] 13b.5 Bundle the **dependency extensions** in `package.json` (`dependencies` + `bundledDependencies`: `pi-mcp-extension` + `pi-subagents`) and reference their resources via `node_modules/` paths in the `pi` manifest; pin to a reviewed version. Document the update path (`pi update --extensions` for semver, explicit git re-pin otherwise), the capability contract (REQ-EXT-015) for substitutes, and the optional `vendor/` git submodules as an audit/patch-only fallback (PR-first upstream). Ship `mcp.json`, `agents/*.md`, and the 3 new skills; note the trust review both deps require.
 - [ ] 13b.4 (Optional) publish to npm; list in the Pi package gallery.
 - **Satisfies:** REQ-EXT-001, REQ-EXT-009 (templates).
-- **Done when:** a clean machine can `pip install saltcode-backend` then `pi install …`, and `/sprint` runs end-to-end; `/phase1`/`/phase2`/`/review` expand in interactive mode.
+- **Done when:** a clean machine can `pip install saltcode-backend` then `pi install …`, and `/sprint` runs end-to-end; the package's **Prompts are visible in `pi config`** under the project package (inherited from Task 0's gate, which cannot assert this because `prompts/` holds only a stub until 13b.1 fills it); `/phase1`/`/phase2`/`/review` expand in interactive mode.
 
 ---
 
