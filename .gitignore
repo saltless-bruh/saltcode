@@ -61,3 +61,6 @@ htmlcov/
 .saltcode/dry_run_log.txt
 workspace/**/.saltcode/cache/
 workspace/**/.saltcode/calibration/
+
+# Pi project-local package settings (created by `pi install -l .`)
+.pi/
