@@ -37,6 +37,7 @@ env/
 # Testing and coverage
 .pytest_cache/
 .ruff_cache/
+.test_db/
 .mypy_cache/
 .pyright/
 htmlcov/

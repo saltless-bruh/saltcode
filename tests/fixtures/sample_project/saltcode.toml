@@ -1,0 +1,4 @@
+[project]
+language = "python"
+test_framework = "pytest"
+test_runner_cmd = "pytest"
