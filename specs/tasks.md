@@ -121,13 +121,41 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 # Track B — TypeScript extension (the bridge) + skills/prompts
 
 ## Task 7 — Sub-agent definitions + per-agent routing (built on the skills)  ·  deps: 0  ·  [CHANGED]
-> The 8 custom skills + 6 cookbooks already exist (COOKBOOKS.md). This task wires them into Pi as **sub-agent definitions** (isolated context per agent) and defines the routing table.
-- [ ] 7.1 Place the 8 `saltcode-*` skills + 6 community cookbooks under `skills/` (SKILL.md folders) per design §17; verify they load via `pi config`.
+> This task wires the Saltcode skills into Pi as **sub-agent definitions** (isolated context per agent) and defines the routing table.
+>
+> **Premise corrected 2026-07-28 (maintainer directed).** This task previously opened
+> "The 8 custom skills + 6 cookbooks already exist (COOKBOOKS.md)." An audit found that
+> false: **4 of the 8** `saltcode-*` skills exist (`scout`, `evaluator`, `builder`,
+> `auditor`). `saltcode-architect`, `saltcode-planner`, `saltcode-test-intent` and
+> `saltcode-compactor` do **not** exist; neither do the 3 new v9 skills (7.4); and
+> `agents/` does not exist at all. All 6 cookbooks do exist, under `.agents/skills/`.
+> (`saltcode-planning` is a generic build-planning skill for *this* repo — it is not
+> one of the 8.) Sourcing and authoring that gap is therefore **part of this task**,
+> not a precondition of it. This is a tasks-layer correction only: REQ-EXT-012 and
+> REQ-EXT-016 already mandate the substance, so `requirements.md` and `design.md` are
+> unchanged.
+
+- [ ] 7.0 **Pin the sub-agent extension contract before authoring anything.** Locate `pi-subagents` (or a substitute meeting the REQ-EXT-015 capability contract) and record its **actual** agent-definition schema — exact frontmatter keys for model, thinking level, tool allowlist, and skill preloading — plus its spawn API. Author `agents/*.md` against the documented schema, never a guessed one. If the schema cannot be established, STOP and raise it (`.claude/rules/stop-and-ask.md`) rather than inventing a format.
+- [ ] 7.1 **Source and inventory the skills.** Audit what exists against design §17's 14 (8 `saltcode-*` + 6 cookbooks). For anything missing that is a *general* capability rather than Saltcode-specific, search reputable public sources rather than writing it from scratch — Anthropic's official skills repository, curated community collections, the Pi package gallery, and npm packages carrying the `pi-package` keyword. For each candidate record: source URL, licence, and last-updated date. Anything adopted is **trust-reviewed before install** (REQ-SEC-006) — these run with full system permissions — and its provenance noted in `COOKBOOKS.md`. Prefer a well-maintained upstream skill over a bespoke one; prefer a bespoke one over a stale or unlicensed import.
+- [ ] 7.1b **Author the 4 missing Saltcode skills** — `saltcode-architect`, `saltcode-planner`, `saltcode-test-intent`, `saltcode-compactor`. These encode this project's contracts and have no upstream equivalent, so they are written, not sourced. Each mirrors the agent's row in design §7 (inputs, outputs, hard rules) and cites the REQ ids it enforces.
+- [ ] 7.1c Place all 14 skills + the 3 new ones under `skills/` (SKILL.md folders) per design §17; verify they load via `pi config`.
 - [ ] 7.2 Author `agents/*.md` sub-agent definitions (for the sub-agent extension, e.g. `pi-subagents`) for Scout, Architect, Planner, Test Intent, Evaluator, Builder — each with frontmatter: model, thinking level, tool allowlist (per design §6), and its Saltcode skill **preloaded directly** into the prompt (do NOT rely on Pi's read-tool auto-discovery — locked-down agents lack `read`). The Auditor is NOT a sub-agent (its N-pass judgment is the backend `compute_stability` tool).
+- [ ] 7.2b **Agent-definition quality bar.** Every `agents/*.md` SHALL satisfy all of the following; a definition failing any point is not done:
+  1. **Identity** — one paragraph naming who the agent is and the single job it owns. One responsibility per agent; no agent has a second job.
+  2. **Negative scope** — an explicit "you do NOT do this" list, naming the neighbouring agents' jobs it must not absorb (e.g. Architect never writes a task list; Planner never reads `context_report.json`).
+  3. **Inputs / outputs as named artifacts** — the exact files it reads and the exact file it writes, per design §7 and §9. No vague "context".
+  4. **Least privilege** — the tool allowlist is the minimum for the job, and each tool is justified in one line. Absent capability beats blocked capability.
+  5. **Output contract** — the typed schema it must emit, and what to do when it cannot (fail loudly with a typed error; never emit a partial or invented artifact).
+  6. **Escalation** — when blocked or when its inputs are self-contradictory, it stops and reports rather than guessing. Mirrors `.claude/rules/stop-and-ask.md`.
+  7. **Zero-context prompt** — the definition assumes no sibling history, because there is none (REQ-EXT-012 AC1). Anything it needs is stated or read from disk.
+  8. **Routing** — model and thinking level are stated and match design §6 exactly, including the session modifier.
+  9. **Traceability** — the REQ ids the agent's behaviour satisfies are cited in the definition.
+  10. **Determinism** — for JSON-emitting agents, thinking `off` and an instruction to emit the artifact and nothing else.
 - [ ] 7.3 Verify each agent's behavior matches its contract in an isolated spawn (Scout AST-only; Architect HARD CONSTRAINTS carry-through; Planner design.md-only; Test Intent project-config + framework; Evaluator four checks; Builder scoped/one-task).
+- [ ] 7.3b **Adversarial contract check.** For each agent, attempt the one thing its contract forbids and confirm the attempt fails: Scout asked for a file body; Architect asked to emit tasks; Planner handed `context_report.json`; Test Intent asked to write implementation code; Builder asked to edit `tests/**` and to read outside `files_affected`. A definition that merely *says* "do not" without a mechanism blocking it is a finding, not a pass.
 - [ ] 7.4 Author the 3 new skills (SKILL.md, valid `name`/`description`): `saltcode-lsp-usage` (symbols/outline before bodies, stay in `files_affected`, never emit raw source — preload for Scout + Builder), `saltcode-delegation` (agent selection, serial-when-dependent, complete zero-context task prompts), `saltcode-checkpoint-ops` (`/checkpoints`, `/rollback`, reading regression failures).
-- **Satisfies:** REQ-SCT/ARC/PLN/TST/EVL/BLD/AUD (behavioral), REQ-EXT-003, REQ-EXT-012, REQ-EXT-016.
-- **Done when:** all 14 base skills + 3 new skills load, and the package's **Skills are visible in `pi config`** under the project package (inherited from Task 0's gate, which cannot assert this because `skills/` is empty until 7.1 fills it); each of the 6 sub-agent definitions spawns in an isolated context with its skill present in-prompt even when it lacks `read`, producing the expected behavior on the fixture repo with only its allowed tools; the routing table resolves a model + thinking level for every (agent, state).
+- **Satisfies:** REQ-SCT/ARC/PLN/TST/EVL/BLD/AUD (behavioral), REQ-EXT-003, REQ-EXT-012, REQ-EXT-015 (dependency contract), REQ-EXT-016, REQ-SEC-006 (trust review of adopted skills).
+- **Done when:** all 14 base skills + 3 new skills load, and the package's **Skills are visible in `pi config`** under the project package (inherited from Task 0's gate, which cannot assert this because `skills/` is empty until 7.1c fills it); every adopted third-party skill has its source, licence and trust review recorded in `COOKBOOKS.md`; each of the 6 sub-agent definitions spawns in an isolated context with its skill present in-prompt even when it lacks `read`, producing the expected behavior on the fixture repo with only its allowed tools; **every definition satisfies all ten points of the 7.2b quality bar, and every forbidden action in 7.3b is demonstrably blocked**; the routing table resolves a model + thinking level for every (agent, state).
 
 ## Task 6 — Prefix assembly in `before_agent_start`  ·  deps: 5, 7, 13  ·  [CHANGED]
 - [ ] 6.1 In `before_agent_start`, assemble `[system(active agent) | design.md | frozen notes | per-call delta]`; return `{ systemPrompt, message }`. Read `event.systemPromptOptions` to respect user config. Pull frozen notes + design.md from the backend/Code-Wiki.
