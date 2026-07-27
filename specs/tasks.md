@@ -2,171 +2,238 @@
 
 The ordered build. Each task is a step-by-step unit for an agent or engineer; every task is **bound by `requirements.md`** (see *Satisfies*) and **explained by `design.md`**. Check a box only when the **Done when** verification passes. This list is the shared human + machine ledger of progress.
 
-**How to use.** Build top-down — later tasks depend on earlier ones (`deps`). Within a task, do the sub-steps in order. A task is *done* only when every sub-box is checked **and** its *Done when* check is green. Do not start a task whose `deps` are unchecked.
+**v9 restructure.** Saltcode is now a Pi Package. Tasks split into two tracks:
+- **Backend (Python)** — the heavy lifting (contracts, gates, sandbox, caches, stability). Mostly unchanged from the standalone build; each capability gains a thin CLI entrypoint in `saltcode.tools.*` called by the extension via `pi.exec`.
+- **Extension (TypeScript)** — the bridge (provider registration, model/thinking routing, tool registration, access-control via `tool_call`, per-phase tool gating, state via `appendEntry`, compaction hook, native TUI, slash commands, the autonomous loop). This **replaces** the old Typer CLI + Textual TUI.
+
+Each task is tagged `[KEEP]` (carries over, minor edits), `[CHANGED]` (same goal, new home/mechanism), `[REPLACED]` (rebuilt for Pi), or `[NEW]`.
 
 Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when** = the gate that proves it.
 
 ---
 
-## Task 0 — Repository scaffold & tooling  ·  deps: none
-- [ ] 0.1 Create the Python 3.11+ project (`pyproject.toml`), package layout per design §15, and a `README.md` stub.
-- [ ] 0.2 Add dev tooling: `ruff`, `pyright` (strict), `pytest`; pin runtime deps (`pydantic>=2`, `lancedb`, `mcp`, `openai`, `httpx`, `typer`, `rich`; optional `textual`, `networkx`).
-- [ ] 0.3 Add CI that runs `ruff`, `pyright --strict`, and `pytest` on every commit.
-- [ ] 0.4 Create the per-project workspace convention: `workspace/<project>/.saltcode/{tests/,cache/}`.
-- **Satisfies:** REQ-GLB-001 (layout), REQ-MEM-002.
-- **Done when:** `pyright --strict` + `ruff` + `pytest` all pass on an empty skeleton in CI.
+# Track A — Python backend (`pip install saltcode-backend`)
 
-## Task 1 — Typed contracts & the Output-Length Enforcer  ·  deps: 0
-- [ ] 1.1 Implement pydantic models: `ContextReport`, `Task`/`TasksFile`, `EvaluatorReport`, `AuditResult` (with `stability` object: `n_passes`, `verdicts[]`, `stability_score`, `gac`) with `schema_version` on each.
-- [ ] 1.2 Implement `design_doc.py`: a parser that extracts the `## HARD CONSTRAINTS` H2 block into a string set.
-- [ ] 1.3 Implement `enforce.py`: validate model output against a schema → on failure, one bounded repair → else raise typed error. Add a JSON-only/length guard.
-- [ ] 1.4 Implement readers/writers that load/store each contract under `.saltcode/`, rejecting unknown major `schema_version`.
-- [ ] 1.5 Add `depends_on` acyclicity + dangling-reference validation for `tasks.json`.
-- [ ] 1.6 Implement a **unified-diff format validator** (`diff_validator.py`): checks that Builder output is a parseable unified diff (`--- a/` / `+++ b/` / `@@ ... @@` format) compatible with `git apply --check`. If invalid, attempts one bounded repair (extract diff from markdown fence), else treats as `impl_fail`.
-- **Satisfies:** REQ-GLB-001, REQ-GLB-002, REQ-GLB-005, REQ-CON-001..006, REQ-PLN-002 (DAG check), REQ-STAT-005.
-- **Done when:** unit tests prove (a) valid samples load, (b) each malformed sample is rejected with a typed error and **no file is written**, (c) a missing HARD CONSTRAINT is detectable, (d) a cyclic `depends_on` fails, (e) `stability` validates as an object with `stability_score ∈ [0.0, 1.0]`, `verdicts` length = `n_passes`, `gac ∈ int≥0`, (f) a valid unified diff passes the diff validator, (g) a raw-file-content output is rejected or repaired-then-validated.
+> Most of this code already exists (the maintainer is at ~Task 6 of the standalone build). The v9 work here is (a) keep the modules, (b) remove the in-backend agent-LLM client and orchestration primitives that moved to the extension, and (c) add a `saltcode.tools.*` CLI entrypoint per capability.
 
-## Task 2 — Providers, embeddings & connectivity  ·  deps: 0
-- [ ] 2.1 Define `LLMClient` interface (`chat(messages, *, thinking: bool, json_schema=None)`), provider-agnostic.
-- [ ] 2.2 Implement `deepseek.py` (OpenAI-compatible) for Phase 1; carry the thinking flag and prefix-cache-friendly message ordering.
-- [ ] 2.3 Implement `local.py` targeting Saltnitor `:8765/v1` (fallback `:8080`), addressing models by router-section id (A_STD/A_FOCUS/B).
-- [ ] 2.4 Implement `embeddings.py` against a local embedding endpoint (offline-capable).
-- [ ] 2.5 Implement `connectivity.py` (online/offline probe) used at session open.
-- [ ] 2.6 Add a guard so any request payload tagged as raw source is refused by API-routed providers (privacy by construction). Local providers are exempt (raw bodies stay on-box).
-- **Satisfies:** REQ-GLB-001 (boundary), REQ-GLB-003 (privacy), REQ-GATE-001 (connectivity), REQ-MOD-005 (Saltnitor serving, DD-2), REQ-CACHE-003 (embeddings, DD-5).
-- **Done when:** mocked tests show provider swap requires no edits outside `providers/`; the source-payload guard rejects a tagged body on API providers but allows it on local; connectivity probe returns a correct online/offline verdict.
+## Task 0 — Scaffold: Pi Package + Python backend  ·  deps: none  ·  [CHANGED]
+- [ ] 0.1 Create the **Python backend** (`saltcode_backend/pyproject.toml`), package layout per design §17, `README` stub. Dev tooling: `ruff`, `pyright --strict`, `pytest`; runtime deps `pydantic>=2`, `lancedb`, `mcp`, `httpx` (drop `typer`/`rich`/`textual` — Pi owns the UI; keep `openai`/`httpx` only for the local Saltnitor client used by stability).
+- [ ] 0.2 Create the **Pi Package** root: `package.json` with `"keywords":["pi-package"]` and `"pi":{ "extensions":["./extensions"], "skills":["./skills"], "prompts":["./prompts"] }`; declare `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-tui`, `typebox` in `peerDependencies` as `"*"`. Add `extensions/` and `prompts/` stubs; `skills/` already populated.
+- [ ] 0.3 TS tooling: `tsconfig.json`, a linter/formatter (e.g. biome), and a type-check step (`tsc --noEmit`). Pi loads `.ts` via jiti — no build step needed at runtime, but type-checking gates CI.
+- [ ] 0.4 CI: run `ruff` + `pyright --strict` + `pytest` (backend) and `tsc --noEmit` + lint (extension) on every commit.
+- [ ] 0.5 Per-project workspace convention: `workspace/<project>/.saltcode/{tests/,cache/,calibration/}`.
+- **Satisfies:** REQ-EXT-001, REQ-GLB-001 (layout), REQ-MEM-002.
+- **Done when:** backend CI green on an empty skeleton; `pi install -l .` loads the package (extension + skills + prompts visible in `pi config`); `tsc --noEmit` passes on the extension stub.
 
-## Task 3 — Harness primitives  ·  deps: 1, 2
-- [ ] 3.1 `dag.py`: a DAG with topological execution and per-node loop caps.
-- [ ] 3.2 `budget.py`: shared per-task retry counter (≤3) with **Tier-A sub-cap (≤2)** + per-sprint loop counters (Architect ≤2, Planner ≤3); observable, never silently reset. On Tier-A sub-cap hit, escalate to Tier B for 1 final attempt. `spec_defect` does NOT consume a retry.
-- [ ] 3.3 `thinking_gate.py`: the exact policy table (Architect ON; Evaluator ON only on re-invoke; Auditor ON only on retry/gaming_suspected; else OFF).
-- [ ] 3.4 `write_allowlist.py`: per-role write paths; reject any diff hunk under `tests/**`.
-- [ ] 3.5 `ctx_compactor.py`: assemble a Builder context of exactly {one task, bodies of task.files_affected, its AST slices, its spec}. No sibling tasks, no design.md, no other files.
-- [ ] 3.6 `phase_gate.py`: auto-advance Phase 1→2 on Evaluator `pass`.
-- [ ] 3.7 `router.py`: connectivity routing + tier selection by session state (fresh→Pro, amend→Flash; offline→all Tier B).
-- [ ] 3.8 `sandbox.py`: create a disposable sandbox (git worktree or temp copy), apply a diff, run commands against it, discard on failure. The live working tree is NEVER modified until Auditor passes.
-- [ ] 3.9 `scope_probe.py`: lightweight scope fingerprinting — if `--scope` not provided, run a single `outline` MCP call on goal-mentioned paths to produce a sorted module/file list for cache key computation. This is a tool call, NOT a Phase-1 fire.
-- **Satisfies:** REQ-ORC-001..007, REQ-GATE-002, REQ-FAIL-001/003, REQ-STAT-001 (sandbox), REQ-CACHE-002 (scope probe).
-- **Done when:** tests prove (a) shared budget=3 with sub-cap=2 triggers Tier-B escalation at attempt 3, (b) budget=3 exhaustion flags human, (c) spec_defect does NOT decrement the retry counter, (d) the thinking flag matches policy for every (agent, state), (e) a `tests/**` hunk is rejected, (f) the phase-gate fires automatically on `pass`, (g) the sandbox applies a diff, runs a command, and leaves the live tree unmodified on failure.
+## Task 1 — Typed contracts & Output-Length Enforcer (+ entrypoints)  ·  deps: 0  ·  [KEEP]
+- [ ] 1.1 pydantic models: `ContextReport`, `Task`/`TasksFile`, `EvaluatorReport`, `AuditResult` (with `stability`), `schema_version` on each.
+- [ ] 1.2 `design_doc.py`: parse the `## HARD CONSTRAINTS` H2 block into a string set.
+- [ ] 1.3 `enforce.py`: validate model output → one bounded repair → else typed error; JSON-only/length guard.
+- [ ] 1.4 Readers/writers under `.saltcode/`, rejecting unknown major `schema_version`.
+- [ ] 1.5 `depends_on` acyclicity + dangling-reference validation.
+- [ ] 1.6 Unified-diff validator (`git apply --check`; one fenced-diff repair, else `impl_fail`).
+- [ ] 1.7 **Entrypoints:** `saltcode.tools.validate_contract`, `saltcode.tools.diff_check` (read args, print result + exit code).
+- **Satisfies:** REQ-GLB-001/002/005, REQ-CON-001..006, REQ-PLN-002 (DAG), REQ-STAT-005, REQ-EXT-004.
+- **Done when:** unit tests prove valid samples load; each malformed sample is rejected with a typed error and **no file written**; a missing HARD CONSTRAINT is detectable; a cyclic `depends_on` fails; `stability` validates; a valid unified diff passes and raw-file output is rejected/repaired; both entrypoints return correct exit codes when run via subprocess.
 
-## Task 4 — LSP/AST MCP server & broker  ·  deps: 0
-- [ ] 4.1 Implement `lsp_ast_server.py` (MCP Python SDK) exposing `where_is`, `find_references`, `outline`; responses are symbols/AST only.
-- [ ] 4.2 Implement `lsp_backends.py`: drive `pyright|tsserver|rust-analyzer|gopls` per repo language via JSON-RPC.
-- [ ] 4.3 Bind localhost-only; assert no outbound network call carries repo content.
-- [ ] 4.4 Implement `broker.py`: expose only role-appropriate tools to each agent. Scout gets AST tools only (no `read_file`). Builder gets AST tools AND a **scoped `read_file(path)` tool** that the broker restricts to paths in the current `task.files_affected` — rejects reads for any other path. All other agents get no `read_file`.
-- [ ] 4.5 Create a **minimal test fixture repo** (`tests/fixtures/sample_project/`) with ≥1 Python file, ≥1 TS file, and a trivial LSP-resolvable symbol graph. Used by Task 4's own tests and later by Tasks 7, 9, 10, 15.
-- **Satisfies:** REQ-MCP-001..003, REQ-ORC-007, REQ-GLB-003, REQ-BLD-002.
-- **Done when:** integration test on the fixture repo returns correct symbols with **no raw body** in AST tool responses; a `read_file` call from Scout is rejected; a `read_file` call from Builder for a path IN `task.files_affected` succeeds; a `read_file` for a path NOT in `task.files_affected` is rejected; a network-egress assertion passes.
+## Task 2 — Backend providers (Saltnitor client + embeddings) & connectivity  ·  deps: 0  ·  [CHANGED]
+> Agent-facing provider management (DeepSeek/Qwen/Saltnitor) moves to the extension's `pi.registerProvider` (Task 11/13). The backend keeps only what its own tools need.
+- [ ] 2.1 `providers/local.py`: a thin OpenAI-compatible client to Saltnitor `:8765/v1` (fallback `:8080`), addressing router sections `A_STD`/`A_FOCUS`/`B`. **Used only by the stability module** (N local Auditor passes) — not for agent turns.
+- [ ] 2.2 `providers/embeddings.py`: local embedding endpoint (offline-capable).
+- [ ] 2.3 `connectivity.py`: online/offline probe (entrypoint `saltcode.tools.connectivity`).
+- [ ] 2.4 Source-payload guard: the backend refuses bodies tagged as source for any outbound call (privacy by construction); local calls are exempt.
+- **Satisfies:** REQ-GLB-003 (privacy), REQ-GATE-001 (connectivity), REQ-CACHE-003 (embeddings, DD-8), REQ-MOD-005 (local client).
+- **Done when:** the embedding client works offline; the connectivity probe returns a correct verdict via subprocess; the source-payload guard rejects a tagged body.
 
-## Task 5 — Memory: LanceDB caches, notes, skills  ·  deps: 1, 2
-- [ ] 5.1 `lancedb_store.py`: open/create tables for spec cache, semantic cache, notes, skills.
-- [ ] 5.2 `spec_cache.py`: key = `sha256(normalized_goal + scope_fingerprint)`. At **store** time: `scope_fingerprint = sorted(tasks.json[*].files_affected)`. At **lookup** time: scope comes from `--scope` CLI arg or the scope probe (Task 3.9). If neither is available (empty repo), scope is empty and key degrades to goal-only.
-- [ ] 5.3 `semantic_cache.py`: embed(goal+scope_fingerprint), cosine ≥ configurable threshold → candidate (no reuse without Architect confirmation). Compute **Prior Cluster Density (PCD)** for each query: count of cached specs within a cosine radius, normalized by cache size. High PCD → cheap confirmation bar; low PCD → skeptical (full confirmation or fall-through). PCD bars calibrated via the measured-then-fixed protocol (Task 5.6).
-- [ ] 5.4 `atomic_notes.py`: auto-RAG ≤5 notes at session open, then FREEZE for the session.
-- [ ] 5.5 `skills.py`: vectorized skills retrieval.
-- [ ] 5.6 Add `calibrated: bool` flag to all threshold configs (cosine, PCD bars, stability). Uncalibrated thresholds use conservative defaults (cosine 0.85, stability 0.5) and log a warning at session open. Store calibration artifacts in `.saltcode/calibration/`.
+## Task 3 — Backend harness primitives (sandbox, scope probe, allowlist, audit)  ·  deps: 1, 2  ·  [CHANGED]
+> Budget tracking, thinking gate, write-path allowlist, phase-gate, router, and prefix assembly move to the **extension** (Task 13). The OS-level / compute primitives stay here.
+- [ ] 3.1 `sandbox.py`: create a disposable sandbox (git worktree), run commands inside a **security container** (auto-detect bwrap → Docker → firejail; refuse if none). Container: read-only host fs, writable workspace only, no network, isolated PID, cgroup mem/CPU/time limits, auto-cleanup. Discard container + sandbox on failure. Entrypoint `saltcode.tools.sandbox_apply`.
+- [ ] 3.2 `scope_probe.py`: if `--scope` absent, one `outline` MCP call → sorted module/file list (a tool call, NOT a Phase-1 fire). Entrypoint `saltcode.tools.scope_probe`.
+- [ ] 3.3 `command_allowlist.py`: only execute whitelisted commands inside the container; refuse + log others. Configurable. (Mirrored at the `tool_call` layer in the extension.)
+- [ ] 3.4 `audit_log.py`: append-only JSONL of every executed command (cmd, cwd, container id, exit code, timestamp, stdout/stderr hash) → `.saltcode/audit_log.jsonl`.
+- **Satisfies:** REQ-STAT-001 (sandbox), REQ-CACHE-002 (scope probe), REQ-SEC-001/002/003/005.
+- **Done when:** the sandbox applies a diff and runs a command inside a container with no network and read-only host fs; a malicious `os.system('rm -rf ~/')` does NOT affect the host; a non-allowlisted command is refused + logged; if no containment backend is found the backend refuses Phase 2; the scope probe returns a sorted module list via subprocess.
+
+## Task 4 — LSP/AST MCP server & scoped-read broker  ·  deps: 0  ·  [KEEP]
+- [ ] 4.1 `lsp_ast_server.py` (MCP Python SDK): `where_is`, `find_references`, `outline`; symbols/AST only.
+- [ ] 4.2 `lsp_backends.py`: drive `pyright|tsserver|rust-analyzer|gopls` per repo language.
+- [ ] 4.3 Localhost-only; assert no outbound call carries repo content.
+- [ ] 4.4 `broker.py`: scoped `read_file(path)` restricted to the current `task.files_affected`; rejects other paths; denied to Scout. (The extension enforces the same via `setActiveTools` + `tool_call` — defense in depth.)
+- [ ] 4.5 Minimal fixture repo (`tests/fixtures/sample_project/`) with ≥1 Python + ≥1 TS file and a trivial symbol graph.
+- [ ] 4.6 **Consumption path:** author `mcp.json` declaring the server over stdio (`{ "command":"python", "args":["-m","saltcode.mcp.lsp_ast_server"], "transport":"stdio", "lifecycle":"eager" }`); consume via an MCP client extension (`pi-mcp-extension`) — do NOT hand-roll a bridge. Verify tools register as `mcp_saltcode-lsp_*` and that the extension's `tool_call` handler still gates them (scope block on out-of-range `read_file`).
+- **Satisfies:** REQ-MCP-001..004, REQ-EXT-013, REQ-ORC-007, REQ-GLB-003, REQ-BLD-002.
+- **Done when:** integration test returns correct symbols with **no raw body** in AST responses; a Scout scoped-read is rejected; a Builder scoped-read inside `task.files_affected` succeeds and outside is rejected; a network-egress assertion passes; the server is reachable through the MCP client extension as `mcp_saltcode-lsp_*` and out-of-scope reads are blocked at `tool_call`.
+
+## Task 5 — Memory: LanceDB caches, notes, skills (+ cache_lookup entrypoint)  ·  deps: 1, 2  ·  [KEEP]
+- [ ] 5.1 `lancedb_store.py`: tables for spec cache, semantic cache, notes, skills.
+- [ ] 5.2 `spec_cache.py`: key = `sha256(normalized_goal + scope_fingerprint)`; store-time vs lookup-time scope per REQ-CACHE-002.
+- [ ] 5.3 `semantic_cache.py`: `embed(goal+scope)`, cosine ≥ threshold → candidate; **PCD** (count within cosine radius / cache size); high PCD → cheap confirm, low → skeptical. Bars calibrated (Task 14b).
+- [ ] 5.4 `atomic_notes.py`: auto-RAG ≤5 notes at session open, then FREEZE.
+- [ ] 5.5 `skills.py`: vectorized skills retrieval (backend's own note/skill store — distinct from Pi skill loading).
+- [ ] 5.6 `calibrated: bool` on all threshold configs; conservative defaults + warning when uncalibrated; artifacts in `.saltcode/calibration/`.
+- [ ] 5.7 **Entrypoint:** `saltcode.tools.cache_lookup` (runs the exact→semantic ladder, returns cached `tasks.json` or `miss`).
 - **Satisfies:** REQ-CACHE-002/003, REQ-MEM-001, REQ-GLB-004 (notes freeze), REQ-CAL-001.
-- **Done when:** tests prove (a) same-goal/different-scope keys differ, (b) goal-only fallback works when scope is empty, (c) notes set is ≤5 and immutable for a session, (d) semantic candidate never reused without the confirm gate (wired in Task 8), (e) PCD is computed correctly (high density for common goals, low for outliers), (f) uncalibrated thresholds are marked as such and log a warning.
+- **Done when:** same-goal/different-scope keys differ; goal-only fallback works; notes ≤5 and immutable per session; PCD computed correctly; uncalibrated thresholds warn; the `cache_lookup` entrypoint returns a hit/miss verdict via subprocess.
 
-## Task 6 — Prefix cache assembly  ·  deps: 1, 5
-- [ ] 6.1 `prefix_cache.py`: assemble `[system | design.md | frozen notes | delta]`; guarantee segments 1–3 byte-stable within a session.
-- **Satisfies:** REQ-PFX-001, REQ-GLB-004.
-- **Done when:** a byte-diff of segments 1–3 across two calls in one session is empty.
+## Task 9 — Static gate, test runner & diff validator (+ entrypoints)  ·  deps: 3  ·  [KEEP]
+- [ ] 9.1 `runners.py`: subprocess adapters for `tsc`, `eslint`, `cargo check`/`clippy`, `go build`/`vet`, `pyright --strict`, `ruff` — each inside the container on the sandbox.
+- [ ] 9.2 `gate.py`: dispatch by language → `clean | dirty(reason)`; record strength (HARD/MEDIUM/SOFT); zero GPU; bounded timeout; via command allowlist. Entrypoint `saltcode.tools.static_gate`.
+- [ ] 9.3 `test_runner.py`: after CLEAN, run the task spec inside the **same** container via `test_runner_cmd`; `pass(output)|fail(output)`; killed on timeout; SKIP if unconfigured. Entrypoint `saltcode.tools.test_run`.
+- [ ] 9.4 Wire the diff validator (1.6) as the first check (entrypoint `saltcode.tools.diff_check`).
+- **Satisfies:** REQ-STAT-001..005, REQ-SEC-001/002.
+- **Done when:** a broken diff per language returns `dirty`; a clean diff returns `clean`+strength; no model loaded; malformed output rejected before sandbox; a failing test returns `fail`; live tree unmodified; missing `test_runner_cmd` skips; destructive side effects are contained.
 
-## Task 7 — Phase-1 agents  ·  deps: 1, 2, 3, 4, 6
-- [ ] 7.1 `agents/base.py`: agent runtime (system prompt, tier, thinking flag, contract enforcement via Task 1).
-- [ ] 7.2 `scout.py`: file_tree + LSP symbols → `context_report.json`; deny raw-body reads.
-- [ ] 7.3 `architect.py`: goal + context_report → `design.md` with verbatim HARD CONSTRAINTS carry-through; reject any task list; Pro/Flash + thinking ON.
-- [ ] 7.4 `planner.py`: design.md only → `tasks.json` (acyclic).
-- [ ] 7.5 `test_intent.py`: tasks.json + **project config** (`language`, `test_framework`, `test_runner_cmd`) → one `tests/task_{id}_spec.*` per task in the correct framework; no impl code. On re-spec, additionally receive `audit_result.detail` as feedback.
-- [ ] 7.6 `evaluator.py`: four checks (traceability, coverage, preservation, compliance) → typed gaps + routing; thinking ON only on re-invoke.
-- [ ] 7.7 Author the per-agent system prompts under `agents/prompts/`.
-- **Satisfies:** REQ-SCT-001/002, REQ-ARC-001..003, REQ-PLN-001/002, REQ-TST-001/002, REQ-EVL-001/002/004, REQ-CON-001..005, REQ-ORC-003.
-- **Done when:** on a fixture repo+goal, Phase 1 emits all valid contracts; a dropped constraint makes preservation fail; a constraint-violating task makes compliance fail; Architect output containing tasks is rejected.
+## Task 10 — Builder/Auditor backend: stability, apply-live, scoped-read  ·  deps: 3, 4, 9  ·  [CHANGED]
+> The Builder and Auditor **agent logic** is now in skills (Task 7). The backend keeps the deterministic pieces.
+- [ ] 10.1 `stability/measure.py`: run the Auditor judgment **N=3** times against the local Saltnitor client (temperature jitter / evidence reordering); compute `stability_score = 1-(verdict_changes/(N-1))` and `gac`; emit the `stability` object. (Online Flash re-judgment on instability is orchestrated by the **extension**, Task 13.) Entrypoint `saltcode.tools.compute_stability`.
+- [ ] 10.2 Auditor heuristics (fixture-literal returns, empty/throw-only bodies, test-input-keyed branches) → folded into the stability/audit pipeline; produce `audit_result.json`.
+- [ ] 10.3 `diffs/apply.py`: apply a **passed** diff to the **live tree** via `git apply` (write-path checked: no `tests/**`). Entrypoint `saltcode.tools.apply_live`. Sandbox apply is in Task 3.1.
+- [ ] 10.4 `tools/read_scoped.py`: the Builder's scoped file read (broker-enforced) — entrypoint `saltcode.tools.read_scoped`.
+- **Satisfies:** REQ-AUD-001/002/003/005, REQ-BLD-002/003, REQ-STAT-001/004/005, REQ-FAIL-001 (sub-cap math), REQ-CON-006.
+- **Done when:** 3 stable passes → `stability_score=1.0`; oscillating verdicts → low stability (flagged for the extension to escalate online); a hardcoded-to-fixtures diff → `gaming_suspected`; `apply_live` refuses a `tests/**` hunk; a passed diff lands on the live tree; `read_scoped` honors `task.files_affected`.
 
-## Task 8 — Cache ladder + Phase-Gate wiring  ·  deps: 5, 7
-- [ ] 8.1 Implement the ladder: exact spec-cache → semantic (with **PCD-adaptive** Architect confirmation: high PCD → cheap/skip, low PCD → full confirmation or fall-through) → fire Phase 1; stop at first hit.
-- [ ] 8.2 On Evaluator `pass`: lock spec, store spec hash, auto-fire Phase-Gate.
-- [ ] 8.3 Wire Evaluator loop routing + caps (A≤2/P≤3) → human flag on breach.
-- **Satisfies:** REQ-CACHE-001, REQ-ORC-002, REQ-EVL-002/003, REQ-FAIL-003.
-- **Done when:** exact hit reuses tasks.json with zero API calls; semantic "no" falls through to Phase 1; exceeding a loop cap halts with a human flag + report.
-
-## Task 9 — Static-analysis gate, test runner & diff validator  ·  deps: 3
-- [ ] 9.1 `runners.py`: subprocess adapters for `tsc`, `eslint`, `cargo check`/`clippy`, `go build`/`vet`, `pyright --strict`, `ruff`. Each runs on a sandbox (git worktree / temp copy), never the live tree.
-- [ ] 9.2 `gate.py`: dispatch by language → `clean | dirty(reason)`; record gate strength (HARD/MEDIUM/SOFT); zero GPU, bounded timeout (configurable).
-- [ ] 9.3 `test_runner.py`: after static gate CLEAN, run the task's spec file (`tests/task_{id}_spec.*`) on the sandbox using project config's `test_runner_cmd`. Returns `pass(output) | fail(output)`. If `test_runner_cmd` is not configured, SKIP (Auditor judges without automated results).
-- [ ] 9.4 Wire the diff validator (Task 1.6) as the first gate check: malformed diff → `impl_fail`, short-circuit before sandbox apply.
-- **Satisfies:** REQ-STAT-001..005.
-- **Done when:** (a) a broken diff per language returns `dirty` with a usable reason; (b) a clean diff returns `clean` + strength; (c) the gate loads no model; (d) a malformed (non-unified-diff) output is rejected before sandbox apply; (e) a failing test spec returns `fail` with test output; (f) the live working tree is unmodified after both dirty and clean paths; (g) a missing `test_runner_cmd` gracefully skips the test step.
-
-## Task 10 — Phase-2 agents (Builder, Auditor) + loop  ·  deps: 3, 4, 7, 9
-- [ ] 10.1 `builder.py`: one task + AST + **scoped file bodies** (only `task.files_affected`) + spec → diff (unified format); reconstruct context from disk each task; never carry over; respect write allowlist.
-- [ ] 10.2 `diffs/apply.py`: apply a diff via `git apply` on a **sandbox** (never the live tree until Auditor passes), rejected first by the write-path allowlist (no `tests/**`).
-- [ ] 10.3 `auditor.py`: heuristics (fixture-literal returns, empty/throw-only bodies, test-input-keyed branches) + **multi-pass stability judgment** (N=3 passes with temperature jitter / evidence reordering; compute `stability_score` and `gac`); escalate to Flash when online + `stability_score < threshold`; offline stays local. Emit `audit_result.json` with `stability` object.
-- [ ] 10.4 Implement the Phase-2 loop:
-    - Diff format check → malformed = `impl_fail` (short-circuit, counts against budget)
-    - Sandbox apply → Static gate (dirty → discard sandbox, short-circuit to Builder)
-    - Test runner on sandbox (fail → discard sandbox, short-circuit to Builder)
-    - Auditor receives: clean static report + test results + test content + diff
-    - Auditor verdict: `pass` → apply diff to live repo, mark done, next task
-    - `impl_fail` → Builder retry (Tier-A sub-cap: after 2 failures on Tier A, escalate 3rd attempt to Tier B)
-    - `gaming_suspected` → Builder retry with "no hardcoding" reason (same sub-cap)
-    - `spec_defect` → re-run Test Intent with `audit_result.detail` as feedback (≤1, does NOT consume a retry)
-    - Shared budget ≤ 3 → FLAG HUMAN
-- **Satisfies:** REQ-BLD-001..003, REQ-AUD-001..004, REQ-STAT-001/004/005, REQ-FAIL-001/002, REQ-TST-002, REQ-ORC-004/006, REQ-MOD-002.
-- **Done when:** (a) a hardcoded-to-fixtures diff is caught as `gaming_suspected`; (b) a `tests/**` edit is rejected; (c) a dirty diff never reaches the Auditor; (d) a failing test never reaches the Auditor; (e) a `spec_defect` triggers re-spec with Auditor feedback (≤1) without consuming a retry; (f) budget exhaustion flags human; (g) 2 failures on Tier A → 3rd attempt on Tier B; (h) the live working tree is unmodified until Auditor passes; (i) 3 stable passes (same verdict) produce `stability_score=1.0`; (j) oscillating verdicts produce low stability and trigger Flash re-judgment online.
-
-## Task 11 — Local serving integration (Tier A/B via Saltnitor)  ·  deps: 2, 10
-- [ ] 11.1 Map three profiles to router-section ids: `A_STD` (default, 64K ctx), `A_FOCUS` (256K ctx for large-context tasks), `B` (escalation). Before a profile's first call, `POST /v1/ensure {profile}`; on oracle OOM refusal → flag human (don't crash).
-- [ ] 11.2 Enforce sequential Builder/Auditor (one resident); select A_STD vs A_FOCUS based on task input token count (threshold: configurable, default 32K); escalate to B when `complexity==high` OR Tier-A sub-cap (2) hit.
-- [ ] 11.3 Enforce the VRAM triangle: A_FOCUS disables thinking; A_STD + thinking enabled for reasoning tasks; MTP (`--spec-*`) opt-in only via config flag, default OFF.
-- [ ] 11.4 Offline path: route ALL Phase-1 agents to profile `B`; keep Auditor faithfulness local (no Flash calls offline).
-- **Satisfies:** REQ-MOD-001..006, REQ-AUD-002, REQ-GATE-001.
-- **Done when:** (a) a high-complexity task ensures `B` before inference; (b) an oracle refusal yields a human flag; (c) offline planning uses `B` and makes no API call; (d) A_FOCUS is selected for tasks with >32K tokens and thinking is OFF; (e) 2 Tier-A failures → 3rd attempt on B.
-
-## Task 12 — Spec Compactor (periodic)  ·  deps: 7
-- [ ] 12.1 `spec_compactor.py`: every 5 sprints, strip completed/resolved content OUTSIDE the `## HARD CONSTRAINTS` block; the HARD CONSTRAINTS block is **never modified** by the Compactor (only by explicit human edit). Write compacted design.md (Flash, non-thinking).
+## Task 12 — Spec Compactor (+ entrypoint)  ·  deps: 1  ·  [KEEP]
+- [ ] 12.1 `spec_compactor.py`: every 5 sprints, strip completed/resolved content OUTSIDE `## HARD CONSTRAINTS`; never modify that block. Entrypoint `saltcode.tools.compact_spec`. (Runs on Flash/thinking-off — the extension sets the model; the backend rewrites the file.)
 - **Satisfies:** REQ-CMP-001.
-- **Done when:** (a) post-compaction, the `## HARD CONSTRAINTS` block is byte-identical to the pre-compaction version; (b) completed task descriptions and obsolete context outside the block are stripped; (c) the Evaluator preservation check still passes.
+- **Done when:** post-compaction the `## HARD CONSTRAINTS` block is byte-identical; obsolete content outside it is stripped; the Evaluator preservation check still passes.
 
-## Task 13 — CLI / TUI  ·  deps: 8, 10, 11
-- [ ] 13.1 `cli.py` (Typer + Rich): `goal` (start a sprint), `resume` (manual resume), `review` (show diff + ship).
-- [ ] 13.2 Surface cold-cache warnings and all human flags (cap breaches, OOM refusals, integration notice).
-- [ ] 13.3 At Sprint Complete, present the diff and **explicitly state logical cross-task integration is the human's check**.
-- [ ] 13.4 (Optional) Textual TUI mirroring the CLI surfaces.
-- **Satisfies:** REQ-FAIL-003/004, REQ-CAD-003.
-- **Done when:** a full sprint is drivable from the CLI; the integration notice appears at Sprint Complete; every human flag is visible.
-
-## Task 14 — End-to-end sprint & session orchestration  ·  deps: 8, 10, 11, 12, 13
-- [ ] 14.1 `session.py`: session lifecycle (connectivity probe, notes freeze, warm prefix, ≥1 sprint).
-- [ ] 14.2 `sprint.py`: sprint = one Phase-1 spec-lock + N Phase-2 task loops; enforce one Phase-1 fire/sprint.
-- [ ] 14.3 `orchestrator.py`: tie session → cache ladder → Phase 1 → Phase-Gate → Phase 2 → Sprint Complete; offline variant.
-- **Satisfies:** REQ-ORC-001, REQ-CAD-001/002/003, REQ-GATE-001, REQ-MOD-003.
-- **Done when:** an online fixture project goes goal→shipped diff with one Phase-1 fire; the offline variant completes on Tier B; a cached goal reuses tasks.json with zero API.
-
-## Task 14b — Threshold calibration (measured-then-fixed protocol)  ·  deps: 10, 14
-- [ ] 14b.1 `calibration.py`: implement the measured-then-fixed protocol (design §8.9). Accept a calibration set (known-good diffs, known-gaming diffs for the Auditor; known-match/non-match goal pairs for the semantic cache), run the measurements, compute optimal thresholds, and store results in `.saltcode/calibration/`.
-- [ ] 14b.2 For the Auditor: run N-pass stability on each calibration diff, plot stability-score distributions for correct-verdict vs. wrong-verdict diffs, compute the threshold that maximizes F1.
-- [ ] 14b.3 For the semantic cache: compute cosine distributions between matching and non-matching goal pairs; set threshold just above max non-match cosine. Compute PCD at this threshold; set the PCD density bars.
-- [ ] 14b.4 Mark calibrated thresholds as `calibrated: true` in config; ensure uncalibrated thresholds log a warning at session open.
+## Task 14b — Threshold calibration (+ entrypoint)  ·  deps: 10  ·  [KEEP]
+- [ ] 14b.1 `stability/calibrate.py` (entrypoint `saltcode.tools.calibrate`): measured-then-fixed protocol — accept a calibration set, run measurements, compute thresholds, store in `.saltcode/calibration/`.
+- [ ] 14b.2 Auditor: N-pass stability on each calibration diff; plot correct vs wrong distributions; threshold = max-F1.
+- [ ] 14b.3 Semantic: cosine distributions for match/non-match; threshold just above max non-match; compute PCD; set density bars.
+- [ ] 14b.4 Mark calibrated thresholds `calibrated: true`; uncalibrated warn at session open.
 - **Satisfies:** REQ-AUD-005, REQ-CAL-001, REQ-CACHE-003 (AC4).
-- **Done when:** (a) calibration on a fixture set produces a documented threshold + distribution plot stored in `.saltcode/calibration/`; (b) the calibrated threshold differs from the default; (c) uncalibrated thresholds are marked and warn at session open; (d) re-running calibration after model change produces a different threshold.
+- **Done when:** calibration produces a documented threshold + distribution; the calibrated threshold differs from the default; uncalibrated thresholds warn; re-running after a model change yields a different threshold.
 
-## Task 15 — Framework test suite & docs  ·  deps: all
-- [ ] 15.1 Author `pytest` coverage that maps tests → requirement IDs (a requirements-traceability matrix).
-- [ ] 15.2 Extend the fixture repo from Task 4.5 with per-language variants (TS, Rust, Go, Python, JS) to exercise all static-gate strengths and test-runner paths.
-- [ ] 15.3 Write the README: install, configure (models/thresholds/flags, **project config with `language`/`test_framework`/`test_runner_cmd`**), run a sprint, offline mode, Saltnitor wiring.
-- **Satisfies:** every REQ (each must have ≥1 mapped test or documented manual check).
-- **Done when:** the traceability matrix shows every requirement covered; `pytest`, `ruff`, `pyright --strict` are green in CI.
+## Task 7b — Backend CLI entrypoints consolidation  ·  deps: 1,2,3,5,9,10,12,14b  ·  [NEW]
+- [ ] 7b.1 Ensure every capability has a standalone `saltcode.tools.<name>` module runnable as `python -m saltcode.tools.<name> [args]`, with a stable JSON-on-stdout contract and exit codes: `validate_contract`, `diff_check`, `scope_probe`, `cache_lookup`, `sandbox_apply`, `static_gate`, `test_run`, `compute_stability`, `apply_live`, `compact_spec`, `calibrate`, `read_scoped`, `connectivity`.
+- [ ] 7b.2 Document each entrypoint's args + output schema (the extension's tool definitions depend on these contracts).
+- **Satisfies:** REQ-EXT-004.
+- **Done when:** each entrypoint runs via subprocess with documented args, prints valid JSON, and returns correct exit codes; a contract-conformance test exercises all of them.
 
-## Task 16 — (Optional) Builder escalation — online-only, default OFF  ·  deps: 10, 11
-- [ ] 16.1 Behind a default-OFF online-only flag: rebuild a 3×-failed task once on Flash before flagging human.
-- [ ] 16.2 Assert it is unreachable offline and when the flag is OFF.
+---
+
+# Track B — TypeScript extension (the bridge) + skills/prompts
+
+## Task 7 — Sub-agent definitions + per-agent routing (built on the skills)  ·  deps: 0  ·  [CHANGED]
+> The 8 custom skills + 6 cookbooks already exist (COOKBOOKS.md). This task wires them into Pi as **sub-agent definitions** (isolated context per agent) and defines the routing table.
+- [ ] 7.1 Place the 8 `saltcode-*` skills + 6 community cookbooks under `skills/` (SKILL.md folders) per design §17; verify they load via `pi config`.
+- [ ] 7.2 Author `agents/*.md` sub-agent definitions (for the sub-agent extension, e.g. `pi-subagents`) for Scout, Architect, Planner, Test Intent, Evaluator, Builder — each with frontmatter: model, thinking level, tool allowlist (per design §6), and its Saltcode skill **preloaded directly** into the prompt (do NOT rely on Pi's read-tool auto-discovery — locked-down agents lack `read`). The Auditor is NOT a sub-agent (its N-pass judgment is the backend `compute_stability` tool).
+- [ ] 7.3 Verify each agent's behavior matches its contract in an isolated spawn (Scout AST-only; Architect HARD CONSTRAINTS carry-through; Planner design.md-only; Test Intent project-config + framework; Evaluator four checks; Builder scoped/one-task).
+- [ ] 7.4 Author the 3 new skills (SKILL.md, valid `name`/`description`): `saltcode-lsp-usage` (symbols/outline before bodies, stay in `files_affected`, never emit raw source — preload for Scout + Builder), `saltcode-delegation` (agent selection, serial-when-dependent, complete zero-context task prompts), `saltcode-checkpoint-ops` (`/checkpoints`, `/rollback`, reading regression failures).
+- **Satisfies:** REQ-SCT/ARC/PLN/TST/EVL/BLD/AUD (behavioral), REQ-EXT-003, REQ-EXT-012, REQ-EXT-016.
+- **Done when:** all 14 base skills + 3 new skills load; each of the 6 sub-agent definitions spawns in an isolated context with its skill present in-prompt even when it lacks `read`, producing the expected behavior on the fixture repo with only its allowed tools; the routing table resolves a model + thinking level for every (agent, state).
+
+## Task 6 — Prefix assembly in `before_agent_start`  ·  deps: 5, 7, 13  ·  [CHANGED]
+- [ ] 6.1 In `before_agent_start`, assemble `[system(active agent) | design.md | frozen notes | per-call delta]`; return `{ systemPrompt, message }`. Read `event.systemPromptOptions` to respect user config. Pull frozen notes + design.md from the backend/Code-Wiki.
+- [ ] 6.2 Guarantee segments 1+3 byte-stable within a session and segment 2 byte-stable within an Evaluator pass.
+- [ ] 6.3 (Debug) optionally inspect `before_provider_request` payloads to verify cache-prefix stability.
+- **Satisfies:** REQ-PFX-001, REQ-GLB-004.
+- **Done when:** a byte-diff of segments 1–3 across two calls in one session is empty; segment 2 is stable within a pass and may change across a re-loop.
+
+## Task 11 — Saltnitor + DeepSeek/Qwen as registered providers  ·  deps: 2, 13  ·  [CHANGED]
+- [ ] 11.1 `pi.registerProvider("deepseek", { api:"openai-completions"|… , models:[v4-flash, v4-pro], apiKey:"$DEEPSEEK_API_KEY" })` and optional Qwen provider.
+- [ ] 11.2 `pi.registerProvider("saltnitor", { baseUrl:"http://127.0.0.1:8765/v1", api:"openai-completions", models:[A_STD, A_FOCUS, B] })`; prefer an **async factory** that fetches `/v1/models`; degrade gracefully if unreachable.
+- [ ] 11.3 Before a Tier-B turn, `ensure` the Saltnitor router section (`POST /v1/ensure {profile:"B"}`); on oracle OOM refusal → FLAG HUMAN (don't crash). Enforce sequential Builder/Auditor (one resident). Select A_STD vs A_FOCUS by task input token count (default 32K). VRAM triangle: A_FOCUS disables high-thinking; MTP opt-in.
+- [ ] 11.4 Offline: route ALL Phase-1 agents to a Tier-B Saltnitor model via `pi.setModel`; keep Auditor faithfulness local.
+- [ ] 11.5 Read `mtp_enabled` and `a_focus_threshold` from `saltcode.toml [local]`; apply to profile selection (A_STD vs A_FOCUS, MTP on/off) in the extension's model-routing handler. Implement the per-turn provider failover chain (configured → `[providers.fallback]` → Saltnitor Tier B → FLAG HUMAN), logging each fallback.
+- **Satisfies:** REQ-EXT-002, REQ-EXT-010, REQ-MOD-001, REQ-MOD-001b, REQ-MOD-002..006, REQ-AUD-002 (offline), REQ-GATE-001.
+- **Done when:** providers appear in `pi --list-models`; a high-complexity task ensures `B` before inference; an oracle refusal yields a human flag; offline planning uses `B` and makes no API call; A_FOCUS is selected >32K with thinking off.
+
+## Task 8 — Cache ladder + Phase-Gate orchestration (extension)  ·  deps: 5, 7, 13  ·  [CHANGED]
+- [ ] 8.1 In the `/sprint` handler: resolve scope (`saltcode_scope_probe` or `--scope`), run `saltcode_cache_lookup` (exact → semantic with **PCD-adaptive** Architect confirmation) → reuse or fire Phase 1; stop at first hit.
+- [ ] 8.2 On Evaluator `pass`: lock spec, store spec hash, advance to Phase 2 automatically; persist sprint state (`pi.appendEntry`).
+- [ ] 8.3 Evaluator loop routing + caps (A≤2 / P≤3) → FLAG HUMAN on breach (`ctx.ui`).
+- **Satisfies:** REQ-CACHE-001, REQ-ORC-001/002, REQ-EVL-002/003, REQ-FAIL-003.
+- **Done when:** exact hit reuses `tasks.json` with zero API; semantic "no" falls through to Phase 1; exceeding a loop cap halts with a human flag + report; a second Phase-1 fire in one sprint is refused.
+
+## Task 13 — The TypeScript extension (the bridge)  ·  deps: 7b, 7  ·  [REPLACED]
+> Replaces the old Typer CLI + Textual TUI entirely. This is the core integration piece.
+- [ ] 13.1 **Factory + lifecycle:** `export default function (pi)`; `session_start` (replay `ctx.sessionManager.getEntries()` → rebuild sprint/budget/task state; probe connectivity; register Saltnitor models); `session_shutdown` cleanup; `resources_discover` contributes skill/prompt paths if not bundled.
+- [ ] 13.2 **Tool registration (bridge):** `pi.registerTool` for each `saltcode_*` capability (TypeBox params; `StringEnum` for enums) whose `execute` talks to the **backend daemon** (Task 19) over stdio/socket, falling back to `pi.exec("python", ["-m","saltcode.tools.<x>", …])` if the daemon is down.
+- [ ] 13.3 **Access control + built-in override:** `pi.on("tool_call")` blocks `tests/**` writes, non-allowlisted commands, and out-of-scope scoped reads (`{ block:true, reason }`, `isToolCallEventType`); **override the built-in `write`/`edit`/`bash`** with same-named tools that route through the container (Task 3.1) so no live built-in bypasses containment in interactive mode; per-agent tool access comes from the sub-agent definitions (Task 7) + `pi.setActiveTools` at the top level.
+- [ ] 13.4 **Model/thinking routing:** per agent, `ctx.modelRegistry.find(...)` → `pi.setModel` (handle `false` → fallback chain, REQ-EXT-010) + `pi.setThinkingLevel(level)` per design §6; update status on `model_select`/`thinking_level_select`.
+- [ ] 13.5 **State:** `pi.appendEntry` for sprint/budget/task; budget tracker (shared ≤3, Tier-A sub-cap 2, `spec_defect` free) + loop counters (A≤2/P≤3) implemented here, observable, never silently reset.
+- [ ] 13.6 **Compaction:** `pi.on("session_before_compact")` preserves the active `## HARD CONSTRAINTS` in any summary (or cancels).
+- [ ] 13.7 **TUI:** `ctx.ui.setWidget` (phase, task deck, gate pipeline, cost), `ctx.ui.setStatus`, `ctx.ui.notify`, `ctx.ui.confirm` for the four decisions; richer dashboard via `ctx.ui.custom` guarded by `ctx.mode==="tui"`.
+- [ ] 13.8 **Commands + sub-agent orchestration:** `pi.registerCommand` for `/sprint` (autonomous loop that **spawns each Phase-1 agent as an isolated sub-agent** in dependency order via the sub-agent extension, awaiting + validating each result — NOT `sendUserMessage` into one session), `/review`, `/status`, `/cost`. Pausing only at Decisions 1–4.
+- [ ] 13.9 **Flags:** `pi.registerFlag("dry-run")` (no subprocess executes; nothing outside `.saltcode/` is written) and `pi.registerFlag("builder-escalation")` (default OFF; Task 16).
+- [ ] 13.10 **Phase-2 loop** (extension side): per task, spawn the **Builder sub-agent** → `saltcode_diff_check` → `saltcode_sandbox_apply` → `saltcode_static_gate` (dirty → short-circuit) → `saltcode_test_run` (fail → short-circuit) → `saltcode_stability` (backend N-pass Auditor); on instability + online, re-run the judgment once on DeepSeek Flash; `pass` → `saltcode_apply_live`, next task; route `impl_fail`/`gaming_suspected`/`spec_defect` per REQ-AUD-003; FLAG HUMAN on budget exhaustion.
+- **Satisfies:** REQ-EXT-003..015, REQ-ORC-002..007, REQ-FAIL-001..004, REQ-SEC-004/006/007, REQ-AUD-002 (escalation), REQ-CAD-003.
+- **Done when:** `/sprint` drives a full sprint pausing only at the four decisions; each Phase-1 agent runs in an isolated sub-agent context; a `tests/**` write and a non-allowlisted command are blocked at `tool_call`; a built-in `bash rm -rf` in interactive mode is contained (routed to the container, host untouched); budget exhaustion flags human; 2 Tier-A failures → 3rd on Tier B; the live tree is unmodified until Auditor `pass`; `--dry-run` runs nothing and writes nothing outside `.saltcode/`; state survives `/resume`.
+
+## Task 13b — Package as a Pi Package (manifest + prompts + publish)  ·  deps: 13  ·  [NEW]
+- [ ] 13b.1 Author prompt templates `prompts/{sprint,phase1,phase2,review}.md` (frontmatter `description` + `argument-hint`; `$@`/`$1` args) as reusable instruction blocks for interactive mode and `/sprint` composition.
+- [ ] 13b.2 Finalize `package.json` `pi` manifest + `peerDependencies`; `pi-package` keyword; optional gallery `image`/`video`.
+- [ ] 13b.3 Verify install paths: `pi install npm:@laz/saltcode` and `pi install git:github.com/laz/saltcode`; project-local `pi install -l .`; document the separate `pip install saltcode-backend` step + how the extension locates the Python module/daemon (PATH / configured interpreter).
+- [ ] 13b.5 Bundle the **dependency extensions** in `package.json` (`dependencies` + `bundledDependencies`: `pi-mcp-extension` + `pi-subagents`) and reference their resources via `node_modules/` paths in the `pi` manifest; pin to a reviewed version. Document the update path (`pi update --extensions` for semver, explicit git re-pin otherwise), the capability contract (REQ-EXT-015) for substitutes, and the optional `vendor/` git submodules as an audit/patch-only fallback (PR-first upstream). Ship `mcp.json`, `agents/*.md`, and the 3 new skills; note the trust review both deps require.
+- [ ] 13b.4 (Optional) publish to npm; list in the Pi package gallery.
+- **Satisfies:** REQ-EXT-001, REQ-EXT-009 (templates).
+- **Done when:** a clean machine can `pip install saltcode-backend` then `pi install …`, and `/sprint` runs end-to-end; `/phase1`/`/phase2`/`/review` expand in interactive mode.
+
+---
+
+# Track C — Integration & quality
+
+## Task 14 — End-to-end sprint & session orchestration  ·  deps: 8, 10, 11, 12, 13  ·  [CHANGED]
+- [ ] 14.1 Interactive mode: plain conversation with skills loaded behaves as the Saltcode agents on the fixture repo.
+- [ ] 14.2 Autonomous mode: `/sprint "<goal>"` runs one Phase-1 fire → Phase-Gate → Phase-2 loop → Sprint Complete, pausing only at Decisions 1–4.
+- [ ] 14.3 Offline variant completes on Tier B; a cached goal reuses `tasks.json` with zero API.
+- **Satisfies:** REQ-ORC-001, REQ-CAD-001/002/003, REQ-GATE-001, REQ-MOD-003, REQ-EXT-008/009.
+- **Done when:** the online fixture goes goal→shipped diff with one Phase-1 fire; the offline variant completes on Tier B; a cached goal reuses `tasks.json` with zero API; the four decisions appear as Pi confirms.
+
+## Task 15 — Test suite & docs (backend + extension)  ·  deps: all  ·  [KEEP]
+- [ ] 15.1 Backend `pytest` coverage mapped to requirement IDs (traceability matrix); extension tests (tool-call blocking, routing, state replay) via Pi's test/SDK harness or scripted `pi -p` runs.
+- [ ] 15.2 Extend the fixture repo with per-language variants (TS, Rust, Go, Python, JS) to exercise all static-gate strengths + test-runner paths.
+- [ ] 15.3 README: install (both `pip` backend + `pi install` package), configure (models/thresholds/flags, **project config** `language`/`test_framework`/`test_runner_cmd`), run a sprint, interactive vs autonomous, offline mode, Saltnitor wiring, security/trust notes.
+- **Satisfies:** every REQ (each ≥1 mapped test or documented manual check).
+- **Done when:** the traceability matrix shows every requirement covered; backend CI (`pytest`/`ruff`/`pyright`) and extension CI (`tsc`/lint) are green.
+
+## Task 16 — (Optional) Builder escalation — online-only, default OFF  ·  deps: 11, 13  ·  [KEEP]
+- [ ] 16.1 Behind the default-OFF `builder-escalation` flag (online-only): rebuild a 3×-failed task once on DeepSeek Flash before flagging human.
+- [ ] 16.2 Assert unreachable offline and when the flag is OFF.
 - **Satisfies:** REQ-OPT-001.
 - **Done when:** with the flag OFF or offline, no Flash Builder call occurs and budget exhaustion flags human; with the flag ON + online, a 3×-failed task gets exactly one Flash rebuild attempt.
+
+## Task 17 — Checkpoint backend: regression runner + commit/snapshot + rollback  ·  deps: 9, 10  ·  [NEW]
+- [ ] 17.1 `regression.py` (or extend `test_run`): run the FULL suite (`regression_cmd`) on the live tree inside the container; `pass | fail(output)`; SKIP if unconfigured. Entrypoint `saltcode.tools.regression`.
+- [ ] 17.2 `checkpoint.py`: git commit (message from task id + description) + write the checkpoint record. Entrypoint `saltcode.tools.checkpoint`.
+- [ ] 17.3 `rollback.py`: `git reset --hard <sha>` + report; refuse (or require force) if uncommitted non-Saltcode changes are present. Entrypoint `saltcode.tools.rollback`.
+- **Satisfies:** REQ-CKP-001, REQ-CKP-002, REQ-CKP-009, REQ-SEC-001 (regression in container).
+- **Done when:** the full suite runs green / fails correctly on the live tree via subprocess; a checkpoint commit + record is produced; rollback resets to a named sha and refuses on a dirty non-Saltcode tree; correct exit codes throughout.
+
+## Task 18 — Auto-advance loop + checkpoint state + run modes (extension)  ·  deps: 13, 17  ·  [NEW]
+- [ ] 18.1 Wrap the Phase-2 loop (13.10): after `saltcode_apply_live`, call `saltcode_regression`; on pass → `saltcode_checkpoint` + `pi.appendEntry("saltcode:checkpoint", …)` → next task; on fail → discard the uncommitted apply (reset to last checkpoint) and route per REQ-CKP-003. Never advance past an un-checkpointed task.
+- [ ] 18.2 Implement `auto_mode` (`off`/`hybrid`/`full`) from `saltcode.toml [checkpoint]` + a `--auto` run flag (`pi.registerFlag`); gate the launch on Decision 1 in ALL modes; FLAG HUMAN always interrupts.
+- [ ] 18.3 Hybrid: on list completion, surface the cumulative diff (Decision 3) with the Trade-B notice. Full Auto: surface ONLY on a stop condition; finish silently otherwise; never `git push` unless `auto_push`.
+- [ ] 18.4 Resume: on `session_start`, find the latest checkpoint, verify `git HEAD == commit_sha`, resume at the next task, or FLAG HUMAN on mismatch.
+- [ ] 18.5 Commands: `pi.registerCommand("checkpoints")` (list) and `pi.registerCommand("rollback")` (→ `saltcode_rollback` + rewind state + audit log entry).
+- **Satisfies:** REQ-CKP-003, REQ-CKP-004, REQ-CKP-005, REQ-CKP-006, REQ-CKP-007, REQ-CKP-008, REQ-CKP-009, REQ-EXT-006 (resume).
+- **Done when:** a Hybrid run auto-advances the whole list and ends with a cumulative-diff review, and rollback works; a Full Auto run finishes unattended when all gates pass and surfaces only on a stop; an interrupted run resumes at the correct task; a regression failure outside `files_affected` flags human; no auto-push occurs when `auto_push=false`.
+
+## Task 19 — Persistent backend daemon (efficiency)  ·  deps: 7b  ·  [NEW]
+- [ ] 19.1 `saltcode/daemon.py`: a long-lived process that imports pydantic/LanceDB/etc. ONCE and serves tool requests over stdio (JSON lines) or a unix socket; dispatches to the same `saltcode.tools.*` handlers.
+- [ ] 19.2 Extension-side daemon client: start on `session_start`, stop on `session_shutdown`; per-request framing + timeouts; **fallback** to per-call `pi.exec` if the daemon is unreachable (correctness preserved).
+- [ ] 19.3 Benchmark: Phase-2 per-task wall-clock with daemon vs cold `pi.exec` (expect large reduction from amortized imports).
+- **Satisfies:** REQ-EXT-014.
+- **Done when:** a Phase-2 task completes with no per-gate interpreter/import cost; killing the daemon mid-run transparently falls back to `pi.exec`; the benchmark shows the daemon is materially faster.
+
+## Task 20 — Dependency integration & config (MCP + sub-agents)  ·  deps: 4, 7, 13  ·  [NEW]
+- [ ] 20.1 Wire the MCP client extension: ship `mcp.json`, confirm `mcp_saltcode-lsp_*` tools register and are gated by our `tool_call` handler (out-of-scope read blocked) and per-agent allowlists.
+- [ ] 20.2 Wire the sub-agent extension: confirm each `agents/*.md` spawns in an isolated context with only its allowed tools and its configured model/thinking; confirm the `/sprint` handler drives them serially.
+- [ ] 20.3 Prove the invariants hold **through** the dependencies: one-task-per-context (isolation), no raw body off-box (MCP AST-only), `tests/**` write blocked, non-allowlisted command blocked, built-in `bash`/`write`/`edit` contained.
+- [ ] 20.4 Capability-contract doc + substitution test: swap in an alternative MCP client / sub-agent extension meeting the contract and re-run 20.1–20.3.
+- **Satisfies:** REQ-EXT-012, REQ-EXT-013, REQ-EXT-015, REQ-MCP-004, REQ-SEC-007, REQ-ORC-006/007.
+- **Done when:** the LSP/AST tools work via the MCP client extension with gating intact; all six sub-agents run isolated with correct tools/models; the security + isolation invariants pass through both dependencies; a substitute extension passes the same suite.
 
 ---
 
 ### Build order (critical path)
-`0 → 1 → 2 → 3 → {4,5} → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 14b → 15` then optional `16`.
-Tasks 4 and 5 may proceed in parallel after 2; Task 14b (calibration) runs after the first few sprints produce data; everything else is linear on the path above.
+
+```
+Backend:   0 → 1 → 2 → 3 → {4,5} → 9 → 10 → 12 → 14b → 7b → {17, 19}
+Extension: 0 → 7 → 13 → {6, 8, 11} → 13b → 18
+Integrate: → 20 → 14 → 15   then optional 16
+```
+
+`7b` (backend entrypoints) must finish before `13.2` (tool registration) can be exercised end-to-end, though both tracks scaffold in parallel after Task 0. `6`, `8`, `11` build on the extension core (`13`). Task 14b (calibration) runs after the first few sprints produce data. The checkpoint system layers on last: `17` (backend regression/commit/rollback tools) extends `9`+`10`, and `18` (the auto-advance loop) wraps the extension's Phase-2 loop (`13.10`) and consumes `17` — so both land after the base pipeline is proven end-to-end. `19` (backend daemon) is a drop-in efficiency layer over `7b` (the extension talks to it, else falls back to `pi.exec`), and `20` (dependency integration) gates real end-to-end runs since the MCP client + sub-agent extensions carry the LSP/AST tools and the isolated agents — so `20` precedes the `14` end-to-end tests.
