@@ -1,0 +1,1 @@
+Start implementing "Task 0 — Scaffold: Pi Package + Python backend  ·  deps: none  ·  [CHANGED]" in tasks.md, follow design.md and requirements.md, used proposal and blueprints as source of Truth.

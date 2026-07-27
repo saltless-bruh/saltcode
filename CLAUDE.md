@@ -35,6 +35,29 @@ The full rule, including what to do when the code and the proposal disagree:
 
 ---
 
+## FOLLOW THE TASK LIST — STOP AND ASK, NEVER WORK AROUND
+
+**Execute `specs/tasks.md` as written.** Do not reorder, skip, merge, "improve", or
+silently substitute a different approach for any step.
+
+**If a task is wrong** — it contradicts the specs or the proposal, contains an error
+or flaw, references something that does not exist, or is too ambiguous to implement
+one way — **stop before starting that work**. State the problem, name the conflicting
+REQ id or design section, propose your fix, and **ask for the human's opinion.**
+
+**If something blocks you** — a missing tool, an uninstalled dependency, an absent
+credential, a permission or trust prompt, an unreachable service — **stop at the
+block.** Do not substitute a weaker tool, skip the verification, stub a result,
+disable a check, guess a value, or quietly narrow the task to the part that works.
+Say what is blocked, say exactly what you need to get past it, and **ask.**
+
+Finish everything that does not depend on the answer first. Never report a task done
+when a leg of its **Done when** gate was skipped or unverified — name the leg and why.
+
+@.claude/rules/stop-and-ask.md
+
+---
+
 ## Repository map
 
 ```
