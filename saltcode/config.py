@@ -1,3 +1,4 @@
+import logging
 import os
 
 from pydantic import BaseModel, Field
@@ -37,8 +38,6 @@ settings = Settings(
     local_default_model=os.getenv("LOCAL_DEFAULT_MODEL", "A_STD"),
     online_mode=os.getenv("SALTCODE_OFFLINE", "0") != "1",
 )
-
-import logging
 
 logger = logging.getLogger(__name__)
 

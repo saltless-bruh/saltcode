@@ -62,14 +62,8 @@ def test_deepseek_privacy_guard() -> None:
 def test_deepseek_prefix_cache_ordering() -> None:
     client = DeepSeekClient(api_key="mock-key")
 
-    # Correct ordering (system first, then user)
-    # This shouldn't raise a ValueError based on ordering
-    # (it might raise other errors if api_key is missing, but not ordering)
-    messages = [
-        {"role": "system", "content": "system prompt"},
-        {"role": "user", "content": "user query"},
-    ]
-    # We pass None/no api key to force request error or mock it, but first check the order verification logic
+    # User-before-system is prefix-cache-unfriendly and must be rejected before
+    # any request is issued.
     with pytest.raises(ValueError) as exc_info:
         client.chat(
             [

@@ -181,7 +181,10 @@ No constraints section here.
 
 def test_enforce_output_length_and_prose() -> None:
     # Test valid JSON within length
-    output_str = '{"schema_version": "1", "existing_patterns": ["pat1"], "relevant_files": [], "constraints": [], "anti_patterns": []}'
+    output_str = (
+        '{"schema_version": "1", "existing_patterns": ["pat1"], '
+        '"relevant_files": [], "constraints": [], "anti_patterns": []}'
+    )
     res = enforce_output(output_str, ContextReport, max_length=500)
     assert res.schema_version == "1"
 
@@ -211,7 +214,10 @@ Here is the requested JSON report:
     assert res_fenced.existing_patterns == ["pat1"]
 
     # Test bounded repair (e.g. truncated/bad JSON)
-    bad_json = '{"schema_version": "1", "existing_patterns": ["pat1"], "relevant_files": [], "constraints": [], "anti_patterns": []'
+    bad_json = (
+        '{"schema_version": "1", "existing_patterns": ["pat1"], '
+        '"relevant_files": [], "constraints": [], "anti_patterns": []'
+    )
     res_repaired = enforce_output(bad_json, ContextReport)
     assert res_repaired.existing_patterns == ["pat1"]
 
@@ -241,14 +247,22 @@ def test_io_safe_write_and_version_rejection(tmp_path: Path) -> None:
 
     # Unsupported Schema Version rejection
     invalid_version_file = tmp_path / "invalid_version.json"
-    invalid_version_file.write_text('{"schema_version": "2", "existing_patterns": [], "relevant_files": [], "constraints": [], "anti_patterns": []}', encoding="utf-8")
-    
+    invalid_version_file.write_text(
+        '{"schema_version": "2", "existing_patterns": [], '
+        '"relevant_files": [], "constraints": [], "anti_patterns": []}',
+        encoding="utf-8",
+    )
+
     with pytest.raises(UnsupportedSchemaVersionError):
         load_contract(invalid_version_file, ContextReport)
 
     # Malformed file (no version) is loaded using default version "1" unless it fails validation
     no_version_file = tmp_path / "no_version.json"
-    no_version_file.write_text('{"existing_patterns": ["p1"], "relevant_files": [], "constraints": [], "anti_patterns": []}', encoding="utf-8")
+    no_version_file.write_text(
+        '{"existing_patterns": ["p1"], "relevant_files": [], '
+        '"constraints": [], "anti_patterns": []}',
+        encoding="utf-8",
+    )
     loaded_no_ver = load_contract(no_version_file, ContextReport)
     assert loaded_no_ver.schema_version == "1"  # Default field value
 

@@ -37,11 +37,20 @@ packages = ["saltcode"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-exclude = [".agents", "workspace", ".venv"]
+# tests/fixtures is a sample target repo used as LSP/AST test *data*, not Saltcode
+# source. Its exact layout is asserted on (tests/test_task_4.py checks symbol line
+# numbers), so reformatting it would break the suite.
+exclude = [".agents", "workspace", ".venv", "tests/fixtures"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "RET", "SIM", "ARG"]
 ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# Test doubles must mirror the signature of what they replace (LLMClient.chat,
+# httpx.Client.post) even where they ignore an argument. Renaming the unused
+# params to satisfy ARG would break keyword-argument compatibility.
+"tests/**" = ["ARG001", "ARG002"]
 
 [tool.pyright]
 include = ["saltcode"]
