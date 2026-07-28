@@ -25,6 +25,7 @@ project, not a summary. The proposal.
 | 2 | `specs/requirements.md` | The binding contract. Every line of code is bound by a REQ id |
 | 3 | `specs/design.md` | The blueprint — what to build, how it fits, which API sits where |
 | 4 | `specs/tasks.md` | The ordered build. The shared human + machine progress ledger |
+| 5 | `specs/known_gaps.md` | What the build knows is **not right yet** — read before every task, updated after every task |
 
 `specs/legacy/` is the **archived** pre-v9 standalone spec set. It is history, never
 authority. Never implement from it and never cite it as a requirement.
@@ -63,7 +64,7 @@ when a leg of its **Done when** gate was skipped or unverified — name the leg 
 ```
 docs/proposal/     # ← SOURCE OF TRUTH (v8 framework + v9 Pi addendum)
 docs/developer_handbook.md   # implementation cookbook (LSP JSON-RPC, LanceDB, sandbox recipes)
-specs/             # requirements.md · design.md · tasks.md  (v9, canonical)
+specs/             # requirements.md · design.md · tasks.md · known_gaps.md  (v9, canonical)
 specs/legacy/      # pre-v9 standalone spec set (archived, non-authoritative)
 package.json       # Pi Package manifest · extensions/ prompts/ skills/ agents/
 extensions/        # THE BRIDGE — TypeScript (stub until Task 13)
@@ -73,18 +74,22 @@ workspace/         # target projects Saltcode operates on
 .agents/           # the same assets in Antigravity's format — a separate tool's config
 ```
 
-## Build state (2026-07-27)
+## Build state (2026-07-28)
 
-- **Done:** legacy Tasks 0–5 — contracts + enforcer + diff validator, providers +
-  embeddings + connectivity, harness primitives, LSP/AST MCP + broker, LanceDB
-  memory. 43 tests green.
-- **Done:** v9 **Task 0** — repo restructured as a Pi Package: backend moved to
-  `saltcode_backend/` with its own `pyproject.toml`, `package.json` manifest,
-  `extensions/saltcode.ts` stub, tsconfig + biome, two-lane CI, workspace convention.
-  One leg of its gate is unverified: `pi install -l .` (Pi is not installed here).
-- **Next:** Track A continues at Task 1 (contracts already exist — add the
-  `saltcode.tools.*` entrypoints), and Track B starts at Task 7 (sub-agent
-  definitions). Build order is at the bottom of `specs/tasks.md`.
+- **Done:** v9 **Tasks 0–3.** Task 0 (Pi Package scaffold, two-lane CI, verified on
+  Pi 0.82.1) · Task 1 (typed contracts + Output-Length Enforcer + `validate_contract`
+  / `diff_check` entrypoints) · Task 2 (Saltnitor client, local embeddings,
+  connectivity probe, the source-payload privacy guard) · Task 3 (disposable
+  sandbox + bubblewrap security container, command allowlist, audit log, scope
+  probe). **183 tests green, 0 skipped;** `ruff` + `pyright --strict` clean;
+  extension lane (`tsc --noEmit`, `biome`) clean.
+- **Next:** Track A at **Task 4** (LSP/AST MCP server + scoped-read broker) or
+  **Task 5** (LanceDB memory) — parallel after Task 3. Track B starts at **Task 7**
+  (sub-agent definitions). Build order is at the bottom of `specs/tasks.md`.
+- **Deployment (confirmed 2026-07-28):** everything — Saltcode, Saltnitor, Docker,
+  the embedding endpoint — runs on **one machine, this one**. The privacy boundary
+  is therefore the box: only loopback counts as local, and a LAN address is off-box.
+- **Open gaps:** see `specs/known_gaps.md` — read it before starting a task.
 - **Migration note:** under v9 several existing modules move out of the backend into
   the extension — `saltcode_backend/saltcode/harness/{dag,budget,thinking_gate,
   phase_gate,router,ctx_compactor,write_allowlist}.py` and `providers/deepseek.py`.

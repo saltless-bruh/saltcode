@@ -9,6 +9,9 @@ Before writing any code, verify — in this order:
 - [ ] You have read the task's **Satisfies** REQ ids in `specs/requirements.md` and
       the `specs/design.md` section it points at. If either is thin or silent, read
       `docs/proposal/`. See `.claude/rules/source-of-truth.md`.
+- [ ] **You have read `specs/known_gaps.md`.** Every gap whose **Closed by** names
+      this task is part of the work. Every open gap touching a file you are about
+      to change is context you need before you change it.
 - [ ] The task's `depends_on` items are all checked in `specs/tasks.md`.
 - [ ] The task does not contradict `specs/design.md` or `specs/requirements.md`.
       If it does, that is a spec defect — surface it, do not code around it.
@@ -114,3 +117,14 @@ Decision 1 gates the launch in every mode. FLAG HUMAN always interrupts.
 After the checkpoint lands: tick the box in `specs/tasks.md` and move to the next task
 in topological order. Remove the sandbox worktree. At the end of the list, run
 `/sprint-complete`.
+
+**Update `specs/known_gaps.md` in the same change**, both directions:
+
+- **Tick** `- [x]` every gap this task actually closed, dated, saying how it was
+  verified. Closed means *gone* — not worked around, not moved elsewhere.
+- **Add** an entry for every gap noticed and not closed: unverified gate legs,
+  capabilities deferred to a later task, spec or doc drift, limitations accepted
+  for now. Include the ones that belong to somebody else's task — that is the
+  point of the list. Give each a severity and name the task that closes it.
+
+Never delete an entry. A ticked gap is the record that it was real and is gone.

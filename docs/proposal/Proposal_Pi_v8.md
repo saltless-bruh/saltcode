@@ -709,7 +709,9 @@ V4 Pro ≈ $0.435/M input · $0.87/M output (post-2026-05-31 steady-state, = the
 
 **STRUCTURAL FIXES (from audit against spec files):**
 
-- **SPEC-CACHE CHICKEN-AND-EGG FIXED.** `scope_fingerprint` at LOOKUP time now comes from a lightweight scope probe (single `outline` MCP call) or `--scope` CLI arg, not from `tasks.json` (which doesn't exist yet). The probe is a tool call, not a Phase-1 fire, so the one-Phase-1-per-sprint invariant holds.
+- **SPEC-CACHE CHICKEN-AND-EGG FIXED.** `scope_fingerprint` at LOOKUP time now comes from a lightweight scope probe (a cheap enumeration of the workspace's source modules — a filesystem walk, no LSP session, no model call) or `--scope` CLI arg, not from `tasks.json` (which doesn't exist yet). The probe is a tool call, not a Phase-1 fire, so the one-Phase-1-per-sprint invariant holds.
+
+  > **Correction 2026-07-28 (maintainer approved).** This line previously read *"a lightweight scope probe (single `outline` MCP call)"*. **What was wrong:** `outline(file_path)` takes **one file** and returns **that file's symbols**, so no single `outline` call can produce the repo-wide sorted module/file list the spec-cache key needs — the mechanism as described was not implementable, and two attempts to read it produced different code *and* different cache keys. **Why it is corrected here rather than only downstream:** the proposal is the source of truth, so leaving a known-false mechanism in it would have left `specs/` looking like unexplained drift. **What is unchanged:** the intent of this fix — a *cheap, non-Phase-1* probe supplying the lookup-time fingerprint, preserving the one-fire-per-sprint invariant — which the sentence above still states verbatim. Flows down to `specs/requirements.md` REQ-CACHE-002, `specs/design.md` §11.2, and task 3.2.
 
 - **TEST RUNNER ADDED to Phase-2 loop.** Pipeline was Builder→Static Gate→Auditor, but nobody ran the tests. Now: Builder→Diff Format Check→Sandbox→Static→Test Runner→Auditor. Tests run on a disposable sandbox, never the live tree. Test failures short-circuit to Builder (count against shared budget), not the Auditor.
 
