@@ -1,4 +1,3 @@
-import sys
 from pathlib import Path
 
 import pytest
@@ -22,7 +21,6 @@ from saltcode.harness import (
     get_agent_tier,
     get_thinking_mode,
     is_spec_locked,
-    run_command_in_sandbox,
     run_scope_probe,
     should_escalate_auditor,
     unlock_spec,
@@ -281,7 +279,12 @@ def test_agent_tier_router() -> None:
 def test_sandbox_copy_and_cmd(tmp_path: Path) -> None:
     # Create mock workspace
     src_file = tmp_path / "main.py"
-    src_file.write_text("print('hello')", encoding="utf-8")
+    # Trailing newline matters: the diff below carries a context line for it, and
+    # `git apply` is strict about that where `patch` was lenient. Task 3 dropped
+    # the `patch -p1` fallback (it is not on the REQ-SEC-002 allowlist), so the
+    # sandbox now accepts exactly what `saltcode_diff_check` accepts — one notion
+    # of "applies" across both gates instead of two.
+    src_file.write_text("print('hello')\n", encoding="utf-8")
     
     # Ensure ignore patterns work by adding ignoreable dirs
     (tmp_path / ".git").mkdir()
@@ -293,11 +296,13 @@ def test_sandbox_copy_and_cmd(tmp_path: Path) -> None:
         assert (sandbox / "main.py").exists()
         assert not (sandbox / ".git").exists()
         
-        # Test command execution
-        res = run_command_in_sandbox(sandbox, [sys.executable, "main.py"])
-        assert res.returncode == 0
-        assert "hello" in res.stdout
-        
+        # Uncontained execution was removed in Task 3: REQ-SEC-001 admits no path
+        # that runs a command outside the security container, and REQ-SEC-005
+        # forbids an uncontained fallback. `run_in_container` replaced
+        # `run_command_in_sandbox`, and `python main.py` is not on the command
+        # allowlist anyway (REQ-SEC-002). Contained execution is covered by
+        # tests/test_task_3_containment.py.
+
         # Test applying diff
         diff = """
 --- a/main.py
@@ -310,7 +315,7 @@ def test_sandbox_copy_and_cmd(tmp_path: Path) -> None:
         assert (sandbox / "main.py").read_text(encoding="utf-8") == "print('hello')\nprint('world')\n"
         
     # Check live workspace remained unmodified
-    assert src_file.read_text(encoding="utf-8") == "print('hello')"
+    assert src_file.read_text(encoding="utf-8") == "print('hello')\n"
 
 
 # ==========================================

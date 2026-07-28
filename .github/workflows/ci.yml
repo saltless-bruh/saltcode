@@ -25,10 +25,18 @@ jobs:
         cache: 'pip'
         cache-dependency-path: saltcode_backend/pyproject.toml
 
+    # The Task 3 containment suite skips when no backend is usable, so without
+    # this the security tests would pass by not running (REQ-SEC-001/005).
+    - name: Install bubblewrap (security container backend)
+      run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -e ".[dev]"
+
+    - name: Report the containment backend in use
+      run: python -m saltcode.tools.sandbox_apply --check-containment
 
     - name: Run Ruff Linter
       run: ruff check .
