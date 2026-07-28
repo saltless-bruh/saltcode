@@ -33,9 +33,16 @@ def lookup_spec(
     goal: str, 
     scope: list[str] | None = None
 ) -> TasksFile | None:
-    """Looks up a spec in the exact cache. Fallbacks to scope probe if scope is None."""
-    resolved_scope = run_scope_probe(goal, workspace_path) if scope is None else scope
-        
+    """Looks up a spec in the exact cache. Falls back to the scope probe if scope is None.
+
+    REQ-CACHE-002 AC2: an explicit `scope` is used directly, with no probe. The
+    probe takes the workspace only — the goal is hashed into the key separately
+    (see `harness/scope_probe.py`), so feeding it in as well would make two
+    phrasings of one goal key differently for an identical tree.
+    """
+    resolved_scope: list[str] = run_scope_probe(workspace_path) if scope is None else scope
+
+
     key = compute_spec_hash(goal, resolved_scope)
     
     db: Any = init_db(workspace_path)

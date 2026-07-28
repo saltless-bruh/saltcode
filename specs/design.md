@@ -429,7 +429,7 @@ auto_push = false          # never push unreviewed commits automatically, any mo
 4. Stable prefix is assembled lazily in `before_agent_start`.
 
 ### 11.2 New goal → Cache Ladder
-**Scope fingerprint.** Store time (after Phase 1): `sorted(tasks.json[*].files_affected)`. Lookup time (before Phase 1): `--scope` arg, else `saltcode_scope_probe` (single `outline` LSP call — a tool call, **not** a Phase-1 fire), else empty (goal-only).
+**Scope fingerprint.** Store time (after Phase 1): `sorted(tasks.json[*].files_affected)`. Lookup time (before Phase 1): `--scope` arg, else `saltcode_scope_probe` (enumerates the workspace's source modules — a filesystem walk, no LSP session, no model call; a tool call, **not** a Phase-1 fire), else empty (goal-only). The probe does not read the goal; the goal is hashed into the key separately. *(Amended 2026-07-28 — this read "single `outline` LSP call", which `outline(file_path)` cannot satisfy; see REQ-CACHE-002.)*
 1. **Spec Cache (exact):** `key = sha256(normalized_goal + scope_fingerprint)`. Hit → reuse `tasks.json`, **zero API**. Stop.
 2. **Semantic Cache (fuzzy):** `embed(goal + scope)`, cosine ≥ threshold → candidate. Compute **PCD** (count of cached specs within a cosine radius / cache size). High PCD → cheap/skipped Architect confirmation; low PCD → full confirmation or fall through. Threshold + bars calibrated (§11.9).
 3. **Miss → fire Phase 1.**

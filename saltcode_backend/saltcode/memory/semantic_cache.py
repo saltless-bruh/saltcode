@@ -55,8 +55,11 @@ def lookup_semantic(
     
     Returns a tuple of (TasksFile, pcd_score) or (None, pcd_score).
     """
-    resolved_scope = run_scope_probe(goal, workspace_path) if scope is None else scope
-        
+    # The probe takes the workspace only; the goal is combined with the scope
+    # below in get_semantic_query (REQ-CACHE-002, harness/scope_probe.py).
+    resolved_scope: list[str] = run_scope_probe(workspace_path) if scope is None else scope
+
+
     client: EmbeddingClient = embedding_client if embedding_client is not None else LocalEmbeddingClient()
         
     db: Any = init_db(workspace_path, client)

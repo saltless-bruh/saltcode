@@ -21,7 +21,6 @@ from saltcode.harness import (
     get_agent_tier,
     get_thinking_mode,
     is_spec_locked,
-    run_scope_probe,
     should_escalate_auditor,
     unlock_spec,
     validate_agent_write_path,
@@ -321,25 +320,8 @@ def test_sandbox_copy_and_cmd(tmp_path: Path) -> None:
 # ==========================================
 # 9. Test Scope Probe
 # ==========================================
-def test_scope_probe(tmp_path: Path) -> None:
-    # Create workspace files
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "auth.py").write_text("pass")
-    (tmp_path / "src" / "db.py").write_text("pass")
-    (tmp_path / "main.py").write_text("pass")
-    
-    # Match specific file name
-    res1 = run_scope_probe("Implement sign in inside auth.py", tmp_path)
-    assert res1 == ["src/auth.py"]
-    
-    # Match folders/multiple files
-    res2 = run_scope_probe("Update code inside src", tmp_path)
-    assert res2 == ["src/auth.py", "src/db.py"]
-    
-    # Match relative path
-    res3 = run_scope_probe("Check src/db.py query", tmp_path)
-    assert res3 == ["src/db.py"]
-    
-    # No matches fallback
-    res4 = run_scope_probe("Implement hello world feature", tmp_path)
-    assert res4 == []
+# Replaced 2026-07-28 (maintainer decision). This test asserted goal-token
+# matching — `run_scope_probe("... auth.py", ws) == ["src/auth.py"]` — which was
+# neither reading of task 3.2 and made the cache key depend on how the goal
+# happened to be worded. Coverage now lives in
+# tests/test_task_3_scope_probe.py, against the enumerate-modules contract.
