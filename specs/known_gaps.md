@@ -161,20 +161,38 @@ trust boundary in practice. The exposure is small — these are mainstream tools
 run from a local install — but it is real, and the honest fix is to run the LSP
 inside the Task-3 container rather than to widen the socket patch.
 
-### - [ ] G-011 — `mcp.json` is authored against an unvalidated schema
-**Severity:** MED · **Noticed:** Task 4.6 · **Closed by:** Task 20.1 ·
-**Where:** `mcp.json`
+### - [ ] G-011 — `mcp.json` sits where no MCP client extension will look
+**Severity:** HIGH · **Noticed:** Task 4.6 · **Closed by:** Task 20.1 ·
+**Where:** `mcp.json`, `specs/design.md` §17
 
-The file uses the key names task 4.6 specifies (`command`, `args`, `transport`,
-`lifecycle`), wrapped in an `mcpServers` object. No MCP client extension has
-been adopted, so none of that is confirmed against a real schema — the same
-"never author against a guessed format" hazard Task 7.0 names for sub-agents.
+Both candidate extensions' sources were read (2026-07-28, tarballs only, nothing
+installed). **Neither reads a repo-root `mcp.json`:**
 
-*Why it matters:* a manifest the client silently ignores looks identical to one
-that works until the tools fail to appear. Adoption is also a **trust decision**
-(REQ-SEC-006): `pi-mcp-extension` v1.5.0 (MIT, 2026-05-03) and the more actively
-maintained `pi-mcp-adapter` v2.15.0 (MIT, 2026-07-25) are both candidates, and
-either runs with full system permissions.
+| | config paths it actually reads |
+|---|---|
+| `pi-mcp-extension` 1.5.0 | `<cwd>/.pi/mcp.json`, `~/.pi/agent/mcp.json` |
+| `pi-mcp-adapter` 2.15.0 | `<cwd>/.mcp.json`, `<cwd>/.pi/mcp.json`, plus globals |
+
+So the file as authored — and the location design §17's tree shows — is read by
+nothing. `<cwd>/.pi/mcp.json` is the one path **both** accept, which also keeps
+REQ-EXT-015 AC1 substitutability intact. Moving it needs a design §17 amendment,
+so it waits on the adoption decision.
+
+Two further schema facts, both confirmed in source:
+
+* The key names are right — `mcpServers` → `{command, args, env, transport,
+  lifecycle}` — but `lifecycle` defaults to `"lazy"`, so `"eager"` must stay
+  explicit for the server to start with the session.
+* **`env` does no `${VAR}` interpolation** (`pi-mcp-extension/src/config.ts`:
+  *"No ${VAR} interpolation — set vars in your shell environment instead"*).
+  The current `"SALTCODE_WORKSPACE": "${workspaceFolder}"` would be passed
+  through **literally**, pointing the server at a directory named
+  `${workspaceFolder}`. It must be a real path or be dropped so the server's
+  `os.path.abspath(".")` default applies.
+
+*Why it matters:* a manifest the client silently ignores looks exactly like one
+that works, right up until the tools never appear. Adoption is also a **trust
+decision** (REQ-SEC-006) — both run with full system permissions.
 
 ### - [ ] G-008 — `skills/` is an empty placeholder
 **Severity:** MED · **Noticed:** Task 0.2 · **Closed by:** Task 7.1c ·
