@@ -190,6 +190,15 @@ Two further schema facts, both confirmed in source:
   `${workspaceFolder}`. It must be a real path or be dropped so the server's
   `os.path.abspath(".")` default applies.
 
+A third fact bears on *which* extension: `pi-mcp-extension` — the one named in
+task 4.6 and design §13 — declares peer dependencies on the **pre-rename**
+`@mariozechner/pi-*` scope, while this project targets `@earendil-works/*`
+(REQ-EXT-001 AC2). It may not load on Pi 0.82.1 at all.
+
+**Deferred by the maintainer on 2026-07-28**: adopt nothing yet. Task 20.1 does
+adoption, wiring and verification in one pass, when Task 13.3's `tool_call`
+handler exists to verify the gating against.
+
 *Why it matters:* a manifest the client silently ignores looks exactly like one
 that works, right up until the tools never appear. Adoption is also a **trust
 decision** (REQ-SEC-006) — both run with full system permissions.

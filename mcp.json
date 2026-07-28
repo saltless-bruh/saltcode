@@ -6,12 +6,22 @@
     "tools they pass through pi.on('tool_call') and each sub-agent's allowlist, so gating and the scoped-read",
     "broker keep working unchanged (design §13, DD-12).",
     "",
-    "UNVERIFIED against a client extension as of 2026-07-28: the key names below are the shape task 4.6",
-    "specifies, not one confirmed against an installed extension's schema. No MCP client extension has been",
-    "adopted yet — that is a trust decision (REQ-SEC-006), and Task 20.1 wires and verifies it. See",
-    "specs/known_gaps.md.",
+    "NOT LIVE — this file is read by nothing today. Do not trust it until Task 20.1 has been through it.",
     "",
-    "SALTCODE_WORKSPACE selects the repository the server indexes; it defaults to the process cwd."
+    "Adoption of an MCP client extension was deferred by the maintainer on 2026-07-28 (it is a trust",
+    "decision, REQ-SEC-006, and the tool_call gating it must be verified against is Task 13.3). Both",
+    "candidates' sources were read on that date, and three things are already known to be wrong here:",
+    "",
+    "  1. LOCATION. Neither candidate reads a repo-root mcp.json. pi-mcp-extension reads <cwd>/.pi/mcp.json;",
+    "     pi-mcp-adapter reads <cwd>/.mcp.json or <cwd>/.pi/mcp.json. `.pi/mcp.json` is the one path both",
+    "     accept. Moving it needs a design §17 amendment, so it waits for the adoption decision.",
+    "  2. ENV. There is no ${VAR} interpolation — ${workspaceFolder} below would be passed through as a",
+    "     literal string. Use a real path, or drop the key and let the server's own default (the process",
+    "     cwd, via SALTCODE_WORKSPACE) apply.",
+    "  3. LIFECYCLE. Defaults to \"lazy\", so \"eager\" has to stay explicit for the server to start with",
+    "     the session.",
+    "",
+    "Full detail in specs/known_gaps.md → G-011."
   ],
   "mcpServers": {
     "saltcode-lsp": {
