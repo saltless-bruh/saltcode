@@ -130,6 +130,52 @@ step or a REQ, so the code is right and the illustration is stale.
 *Why it matters:* only that a stale tree invites someone to "clean up" a module
 that a requirement mandates. It is illustrative, not normative.
 
+### - [ ] G-009 — Only the Python language server is verified; TS, Rust and Go are not
+**Severity:** MED · **Noticed:** Task 4.2 · **Closed by:** Task 15.2 ·
+**Where:** `saltcode_backend/saltcode/mcp/lsp_backends.py` (`LSP_COMMANDS`)
+
+`pyright-langserver` ships in the backend's own environment, so the Python LSP
+path is exercised end to end. The other three are dispatch-only: nothing here
+has ever spoken LSP to `typescript-language-server`, `rust-analyzer` or `gopls`.
+`/home/laz/.cargo/bin/rust-analyzer` is a **rustup shim for an uninstalled
+component** — on `PATH`, exits 1 — so `command -v` reports it as present.
+
+*Why it matters:* REQ-MCP-003 AC1 names Rust specifically. Each server has its
+own handshake quirks — the Python path needed `didOpen` before `documentSymbol`
+would answer at all — so the others are likely to need their own fixes, and the
+AST fallback will quietly cover for them until someone looks. Task 15.2 already
+plans per-language fixture variants; installing the servers there closes this.
+Cheapest first step: `rustup component add rust-analyzer`.
+
+### - [ ] G-010 — The egress guard does not cover the language-server subprocess
+**Severity:** LOW · **Noticed:** Task 4.3 · **Closed by:** Task 20.3 ·
+**Where:** `saltcode_backend/saltcode/mcp/lsp_ast_server.py` (`install_egress_guard`)
+
+The guard patches `socket.connect`/`connect_ex` in **our** process. A language
+server is a separate process holding the same source, and nothing here stops it
+opening a socket of its own.
+
+*Why it matters:* REQ-MCP-002 says the server "SHALL NOT transmit any repo
+content to a remote host", and the language server is part of that server's
+trust boundary in practice. The exposure is small — these are mainstream tools
+run from a local install — but it is real, and the honest fix is to run the LSP
+inside the Task-3 container rather than to widen the socket patch.
+
+### - [ ] G-011 — `mcp.json` is authored against an unvalidated schema
+**Severity:** MED · **Noticed:** Task 4.6 · **Closed by:** Task 20.1 ·
+**Where:** `mcp.json`
+
+The file uses the key names task 4.6 specifies (`command`, `args`, `transport`,
+`lifecycle`), wrapped in an `mcpServers` object. No MCP client extension has
+been adopted, so none of that is confirmed against a real schema — the same
+"never author against a guessed format" hazard Task 7.0 names for sub-agents.
+
+*Why it matters:* a manifest the client silently ignores looks identical to one
+that works until the tools fail to appear. Adoption is also a **trust decision**
+(REQ-SEC-006): `pi-mcp-extension` v1.5.0 (MIT, 2026-05-03) and the more actively
+maintained `pi-mcp-adapter` v2.15.0 (MIT, 2026-07-25) are both candidates, and
+either runs with full system permissions.
+
 ### - [ ] G-008 — `skills/` is an empty placeholder
 **Severity:** MED · **Noticed:** Task 0.2 · **Closed by:** Task 7.1c ·
 **Where:** `skills/`

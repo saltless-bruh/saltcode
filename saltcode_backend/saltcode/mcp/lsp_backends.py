@@ -3,7 +3,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
+import sys
 import threading
 from concurrent.futures import Future
 from pathlib import Path
@@ -73,23 +75,66 @@ class LSPBackend:
                 self.cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                bufsize=0
+                # Captured, not discarded: a server that refuses to start says
+                # why on stderr, and DEVNULL turned every such failure into a
+                # silent fall back to the regex path. A rustup *shim* for an
+                # uninstalled `rust-analyzer` component, for instance, exits 1
+                # with a precise message that was being thrown away.
+                stderr=subprocess.PIPE,
+                bufsize=0,
             )
-        except FileNotFoundError:
-            logger.warning(f"LSP executable {self.cmd[0]} not found. Running in fallback mode.")
+        except (FileNotFoundError, PermissionError, OSError) as exc:
+            logger.warning("LSP executable %s unavailable (%s). Running in fallback mode.", self.cmd[0], exc)
             self.process = None
             return
-            
+
         self.running = True
         self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self.reader_thread.start()
-        
+
+        # A server that is going to refuse usually does so at once (a wrong
+        # binary, a missing toolchain component). Noticing here turns a 5-second
+        # handshake timeout with an empty message into an immediate, specific one.
+        try:
+            self.process.wait(timeout=0.2)
+        except subprocess.TimeoutExpired:
+            pass  # still alive — the normal case
+        else:
+            logger.warning("LSP server %s exited immediately%s", self.cmd[0], self._drain_stderr())
+            self.stop()
+            return
+
         try:
             self._handshake()
-        except Exception as e:
-            logger.error(f"LSP handshake failed: {e}. Falling back.")
+        except Exception as exc:
+            # `concurrent.futures.TimeoutError` stringifies to "", so the class
+            # name is reported too — otherwise the log read "handshake failed: ."
+            logger.warning(
+                "LSP handshake with %s failed (%s: %s)%s. Falling back to the AST path.",
+                self.cmd[0],
+                type(exc).__name__,
+                exc,
+                self._drain_stderr(),
+            )
             self.stop()
+
+    def _drain_stderr(self) -> str:
+        """Whatever the server said before dying — the useful half of a failure.
+
+        Read only once the process has exited, where the write end is closed and
+        the read cannot block. A server that is merely slow gets nothing quoted,
+        which is correct: it has not said anything yet.
+        """
+        if not self.process or not self.process.stderr:
+            return ""
+        if self.process.poll() is None:
+            return " (the server is still running but did not answer)"
+        try:
+            data = self.process.stderr.read() or b""
+        except (OSError, ValueError):
+            return ""
+        text = data.decode("utf-8", errors="replace").strip()
+        return f" — server exited {self.process.returncode} saying: {text}" if text else ""
 
     def _reader_loop(self) -> None:
         if not self.process or not self.process.stdout:
@@ -194,6 +239,33 @@ class LSPBackend:
         }
         self.send_request("initialize", init_params)
         self.send_notification("initialized", {})
+
+    def did_open(self, file_path: str, language_id: str) -> bool:
+        """Tell the server about a document before querying it.
+
+        Not optional: pyright answers `textDocument/documentSymbol` with an
+        empty result for a document it has never been told about, and an empty
+        outline is indistinguishable from a file with no symbols. The text goes
+        to a **local stdio subprocess**, never to a network provider, so this
+        does not touch the privacy boundary (REQ-MCP-002 guards egress).
+        """
+        try:
+            text = Path(file_path).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return False
+
+        self.send_notification(
+            "textDocument/didOpen",
+            {
+                "textDocument": {
+                    "uri": Path(file_path).as_uri(),
+                    "languageId": language_id,
+                    "version": 1,
+                    "text": text,
+                }
+            },
+        )
+        return True
 
     def stop(self) -> None:
         self.running = False
@@ -417,17 +489,41 @@ def fallback_find_references(workspace_path: Path | str, symbol_name: str, _file
     return refs
 
 
+LSP_COMMANDS: dict[str, list[str]] = {
+    "python": ["pyright-langserver", "--stdio"],
+    "typescript": ["typescript-language-server", "--stdio"],
+    "javascript": ["typescript-language-server", "--stdio"],
+    "rust": ["rust-analyzer"],
+    "go": ["gopls"],
+}
+"""REQ-MCP-003: one language server per repo language."""
+
+
+def resolve_executable(name: str) -> str:
+    """Absolute path to ``name``, preferring one installed beside this interpreter.
+
+    `pip install` puts console scripts in the same `bin/` as the interpreter, so
+    a `pyright-langserver` from the backend's own environment lives next to
+    `sys.executable` — and is *not* on `PATH` unless the venv happens to be
+    activated. Looking there first is what makes the language server findable
+    when the backend is invoked as `<venv>/bin/python -m saltcode…`, which is
+    exactly how `pi.exec` will invoke it.
+
+    Falls back to `PATH`, then to the bare name so the caller still gets a
+    recognisable `FileNotFoundError`.
+    """
+    beside_interpreter = Path(sys.executable).parent / name
+    if beside_interpreter.is_file():
+        return str(beside_interpreter)
+    return shutil.which(name) or name
+
+
 def get_lsp_command(language: str) -> list[str]:
     lang = language.lower()
-    if lang == "python":
-        return ["pyright-langserver", "--stdio"]
-    if lang in ("typescript", "javascript"):
-        return ["typescript-language-server", "--stdio"]
-    if lang == "rust":
-        return ["rust-analyzer"]
-    if lang == "go":
-        return ["gopls"]
-    raise ValueError(f"Unsupported language for LSP: {language}")
+    command = LSP_COMMANDS.get(lang)
+    if command is None:
+        raise ValueError(f"Unsupported language for LSP: {language}")
+    return [resolve_executable(command[0]), *command[1:]]
 
 
 def get_lsp_backend(workspace_path: Path | str) -> LSPBackend | None:

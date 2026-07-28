@@ -1,0 +1,27 @@
+{
+  "$comment": [
+    "Declares Saltcode's LSP/AST server for an MCP client extension (task 4.6, REQ-MCP-004, REQ-EXT-013).",
+    "Pi ships no MCP client, so the server is NOT bridged by hand: the client extension discovers it and",
+    "registers its tools as native Pi tools named mcp_saltcode-lsp_*. Because those are ordinary registered",
+    "tools they pass through pi.on('tool_call') and each sub-agent's allowlist, so gating and the scoped-read",
+    "broker keep working unchanged (design §13, DD-12).",
+    "",
+    "UNVERIFIED against a client extension as of 2026-07-28: the key names below are the shape task 4.6",
+    "specifies, not one confirmed against an installed extension's schema. No MCP client extension has been",
+    "adopted yet — that is a trust decision (REQ-SEC-006), and Task 20.1 wires and verifies it. See",
+    "specs/known_gaps.md.",
+    "",
+    "SALTCODE_WORKSPACE selects the repository the server indexes; it defaults to the process cwd."
+  ],
+  "mcpServers": {
+    "saltcode-lsp": {
+      "command": "python",
+      "args": ["-m", "saltcode.mcp.lsp_ast_server"],
+      "transport": "stdio",
+      "lifecycle": "eager",
+      "env": {
+        "SALTCODE_WORKSPACE": "${workspaceFolder}"
+      }
+    }
+  }
+}

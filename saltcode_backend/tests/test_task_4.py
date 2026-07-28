@@ -96,11 +96,16 @@ def test_tool_broker_roles() -> None:
     assert "outline" in builder_tools
     assert "read_file" in builder_tools
 
-    # Architect role: should get AST tools, but NO read_file
+    # Architect role: NO tools at all.
+    # Corrected 2026-07-28 (Task 4.4). This previously asserted the Architect
+    # gets the AST tools, which contradicts design §5.6 — "Scout: AST tools
+    # only, no scoped read; Builder: AST + saltcode_read_scoped limited to
+    # task.files_affected; others: none". Architect, Planner, Test Intent and
+    # Evaluator work purely from typed JSON contracts on disk (design §7), so
+    # holding the AST tools is a least-privilege breach: absent capability
+    # beats blocked capability. Full coverage in tests/test_task_4_broker.py.
     arch_broker = ToolBroker("Architect", FIXTURE_DIR)
-    arch_tools = arch_broker.get_tools()
-    assert "outline" in arch_tools
-    assert "read_file" not in arch_tools
+    assert arch_broker.get_tools() == {}
 
 
 def test_tool_broker_scoped_read_file() -> None:

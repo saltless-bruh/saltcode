@@ -1,3 +1,4 @@
+import ipaddress
 import os
 import socket
 import urllib.parse
@@ -15,21 +16,83 @@ from saltcode.mcp.lsp_backends import (
     load_project_config,
 )
 
-original_connect = socket.socket.connect
+# --------------------------------------------------------------- egress guard (4.3)
+#
+# REQ-MCP-002: this server holds the whole repository's symbol graph, so it is
+# the single process with the most to leak. It may talk to a language server
+# over stdio and to nothing else. The guard is installed at import — not behind
+# a call the `__main__` block might skip — because a privacy boundary that
+# depends on someone remembering to switch it on is not a boundary.
+#
+# It patches the socket layer rather than any HTTP client: every TCP connection
+# in CPython goes through `socket.connect`/`connect_ex`, so there is no library
+# that routes around it. `_SALTCODE_GUARDED` makes installation idempotent —
+# without it, a module reload would capture the wrapper as "the original" and
+# recurse forever on the next connect.
+
+_GUARD_FLAG = "_saltcode_egress_guarded"
+
+_REFUSAL = (
+    "Outbound network connection to {host} blocked by Saltcode privacy boundary "
+    "(REQ-MCP-002: the LSP/AST server never transmits repo content off-box)."
+)
 
 
-# Enforce localhost-only/local-only transport.
-# We assert that we are running locally and do not transmit repo data to remote hosts.
-# We also restrict any socket connection to localhost.
-def connect_wrapper(self: socket.socket, address: tuple[str, int] | Any) -> None:
-    host: str = str(address[0])
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        # Enforce privacy boundary: raise connection error if attempting to connect externally
-        raise PermissionError(f"Outbound network connection to {host} blocked by Saltcode privacy boundary.")
-    original_connect(self, address)
+def _is_loopback(host: str) -> bool:
+    """Only the local machine counts as local (single-machine deployment).
+
+    Matches `providers/guard.classify_destination`: loopback literals and the
+    reserved `localhost` name, nothing else. Unparseable → not loopback, so the
+    unknown case is the refusing one.
+    """
+    lowered = host.lower()
+    if lowered == "localhost" or lowered.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(lowered).is_loopback
+    except ValueError:
+        return False
 
 
-socket.socket.connect = connect_wrapper  # type: ignore[assignment]
+def install_egress_guard() -> None:
+    """Refuse any non-loopback socket connection from this process. Idempotent."""
+    if getattr(socket.socket, _GUARD_FLAG, False):
+        return
+
+    original_connect = socket.socket.connect
+    original_connect_ex = socket.socket.connect_ex
+
+    def _refused_host(address: object) -> str | None:
+        """The host to refuse, or None when this address may proceed.
+
+        Only AF_INET/AF_INET6 addresses are (host, port) tuples. A unix socket
+        address is a path string and carries no network egress, so it passes.
+        """
+        if not isinstance(address, tuple) or not address:
+            return None
+        host = str(cast("tuple[Any, ...]", address)[0])
+        return None if _is_loopback(host) else host
+
+    def connect_wrapper(self: socket.socket, address: Any) -> None:
+        host = _refused_host(address)
+        if host is not None:
+            raise PermissionError(_REFUSAL.format(host=host))
+        original_connect(self, address)
+
+    def connect_ex_wrapper(self: socket.socket, address: Any) -> int:
+        # Also guarded: `connect_ex` returns an errno instead of raising, so a
+        # caller using it would otherwise have an unguarded path to the network.
+        host = _refused_host(address)
+        if host is not None:
+            raise PermissionError(_REFUSAL.format(host=host))
+        return original_connect_ex(self, address)
+
+    socket.socket.connect = connect_wrapper  # type: ignore[assignment]
+    socket.socket.connect_ex = connect_ex_wrapper  # type: ignore[assignment]
+    socket.socket._saltcode_egress_guarded = True  # type: ignore[attr-defined]
+
+
+install_egress_guard()
 
 mcp = FastMCP("Saltcode LSP/AST Server")
 
@@ -67,14 +130,23 @@ def outline(file_path: str) -> str:
     backend = get_active_backend()
     if backend and backend.process and backend.running:
         try:
-            # Note: uri must be formatted correctly
+            # The document must be opened first: pyright answers documentSymbol
+            # for an unknown document with an empty result, which is
+            # indistinguishable from "this file has no symbols".
+            backend.did_open(full_path, get_project_lang())
+
             uri = urllib.parse.urljoin("file:", urllib.request.pathname2url(full_path))
             params = {"textDocument": {"uri": uri}}
             resp = backend.send_request("textDocument/documentSymbol", params)
-            if "result" in resp and resp["result"] is not None:
+            if "result" in resp and resp["result"]:
                 from saltcode.mcp.lsp_backends import format_symbols
 
-                return format_symbols(resp["result"])
+                formatted = format_symbols(resp["result"])
+                # An empty render falls through rather than being returned: a
+                # live-but-unhelpful language server must never leave the caller
+                # worse off than having none at all.
+                if formatted.strip():
+                    return formatted
         except Exception:
             pass
 
