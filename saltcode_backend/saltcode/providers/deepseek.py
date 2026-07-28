@@ -4,10 +4,16 @@ import httpx
 
 from saltcode.config import settings
 from saltcode.providers.base import LLMClient
+from saltcode.providers.guard import guard_outbound
 
 
 class DeepSeekClient(LLMClient):
-    """LLMClient provider implementation for the DeepSeek API."""
+    """LLMClient provider implementation for the DeepSeek API.
+
+    **Migrating out (v9).** Agent-facing provider management moves to the
+    extension's `pi.registerProvider` (design DD-2, tasks 11/13). This module is
+    kept only until that lands: port it, do not extend it.
+    """
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None):
         self.api_key = api_key or settings.deepseek_api_key
@@ -23,18 +29,11 @@ class DeepSeekClient(LLMClient):
         contains_raw_source: bool = False,
     ) -> str:
         # 1. Privacy Boundary Guard (REQ-GLB-003)
-        if contains_raw_source:
-            raise ValueError("Privacy boundary violation: request payload contains raw source code.")
-
-        for msg in messages:
-            # Check explicit metadata tagging
-            if msg.get("is_source") or msg.get("metadata", {}).get("contains_raw_source"):
-                raise ValueError("Privacy boundary violation: request message contains tagged raw source code.")
-            
-            # Check content for tags
-            content = msg.get("content", "")
-            if isinstance(content, str) and ("<raw_source>" in content or "<source_code>" in content):
-                raise ValueError("Privacy boundary violation: request message content contains raw source tags.")
+        # The checks that used to be inlined here now live in providers/guard.py,
+        # so every outbound call in the backend is refused on the same terms
+        # rather than on whichever ones its own author remembered (task 2.4).
+        endpoint = f"{self.base_url.rstrip('/')}/chat/completions"
+        guard_outbound(endpoint, messages, contains_raw_source=contains_raw_source)
 
         # 2. Validate prefix-cache-friendly message ordering
         # System messages must come first. If a system message is found after a user/assistant message, warn/error.
@@ -88,7 +87,6 @@ class DeepSeekClient(LLMClient):
         if not self.api_key:
             raise ValueError("DeepSeek API key is not configured.")
 
-        endpoint = f"{self.base_url.rstrip('/')}/chat/completions"
         try:
             with httpx.Client() as client:
                 response = client.post(endpoint, headers=headers, json=payload, timeout=60.0)

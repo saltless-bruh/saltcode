@@ -15,6 +15,9 @@ class Settings(BaseModel):
     saltnitor_url: str = Field(default="http://127.0.0.1:8765")
     llamacpp_fallback_url: str = Field(default="http://127.0.0.1:8080")
     local_default_model: str = Field(default="A_STD")
+    # DD-8: retrieval must work offline, so the embedding model is a local one
+    # (bge-small / nomic-embed) served behind the OpenAI-compatible endpoint.
+    embedding_model: str = Field(default="bge-small")
 
     # Thresholds & Calibration
     auditor_stability_threshold: float = Field(default=0.5)
@@ -36,6 +39,7 @@ settings = Settings(
     saltnitor_url=os.getenv("SALTNITOR_URL", "http://127.0.0.1:8765"),
     llamacpp_fallback_url=os.getenv("LLAMACPP_FALLBACK_URL", "http://127.0.0.1:8080"),
     local_default_model=os.getenv("LOCAL_DEFAULT_MODEL", "A_STD"),
+    embedding_model=os.getenv("SALTCODE_EMBEDDING_MODEL", "bge-small"),
     online_mode=os.getenv("SALTCODE_OFFLINE", "0") != "1",
 )
 
