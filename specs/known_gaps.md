@@ -190,31 +190,6 @@ handler exists to verify the gating against.
 that works, right up until the tools never appear. Adoption is also a **trust
 decision** (REQ-SEC-006) — both run with full system permissions.
 
-### - [ ] G-012 — `mcp` is unpinned, and `mcp` 2.0 breaks the LSP/AST server
-**Severity:** HIGH · **Noticed:** Task 5 (baseline run) · **Closed by:** Task 20.1
-(or a pyproject pin) · **Where:** `saltcode_backend/pyproject.toml`,
-`saltcode_backend/saltcode/mcp/lsp_ast_server.py`
-
-`pyproject.toml` declares `mcp>=0.1.0` with no upper bound. A fresh
-`pip install -e ".[dev]"` today resolves **mcp 2.0.0**, which removed
-`mcp.server.fastmcp` (renamed to `mcp.server.mcpserver`). The import at
-`lsp_ast_server.py:9` then fails, which **breaks collection of
-`tests/test_task_4.py` and `tests/test_task_4_broker.py`** and adds 10
-`pyright --strict` errors. Pinning `mcp<2` in the local venv restores the API
-Task 4 was verified against and the suite collects again.
-
-*Why it matters:* CI runs `pip install -e ".[dev]"` on a clean runner every time,
-and the run for PR #2 confirms it installed `mcp-2.0.0`. The floor silently
-re-resolves on every fresh install, so the next person to set up a dev environment
-will think they broke Task 4. Not fixed here because the pin is outside Task 5's
-scope and the alternative — porting `lsp_ast_server.py` to the 2.0 API — belongs to
-whoever owns the MCP server. **Recommendation: pin `mcp>=1,<2`.**
-
-*Correction (2026-07-29):* this entry first said CI was red **because of** this. It
-is not — the job dies earlier, at the containment step (**G-016**), and never
-reaches `pyright` or `pytest`. This is the *second* blocker to a green CI run, not
-the first. Both must be fixed for the backend lane to pass.
-
 ### - [ ] G-013 — `bwrap` reports containment on a host where the limits do not bind
 **Severity:** MED · **Noticed:** Task 5 (baseline run) · **Closed by:** Task 9 or
 Task 20.3 · **Where:** `saltcode_backend/saltcode/harness/sandbox.py`
@@ -236,47 +211,15 @@ assert a limit binds (e.g. a small allocation under a small cap is killed), or t
 verdict should distinguish "isolated" from "isolated **and** limited".
 
 *Status here:* these 9 failures are **pre-existing and unrelated to Task 5** —
-recorded before any Task 5 change and byte-identical after. Task 3's legs were
-genuinely verified on the maintainer's box on 2026-07-28; they simply cannot be
-re-verified in this container.
+recorded before any Task 5 change and byte-identical after.
 
-### - [ ] G-016 — CI cannot run the containment suite: GitHub runners restrict userns
-**Severity:** HIGH · **Noticed:** Task 5 (PR #2 CI run) · **Closed by:** Task 0.4 /
-Task 3 CI wiring · **Where:** `.github/workflows/ci.yml`
-
-**The backend CI lane has failed on every push to `main` since at least
-2026-07-27** — 10 consecutive runs — and it is not any current task's doing. The
-workflow's third step, `python -m saltcode.tools.sandbox_apply --check-containment`,
-exits 3:
-
-> `bwrap: installed but cannot create a namespace (unprivileged user namespaces may
-> be restricted); docker: installed, but [sandbox] image is not configured
-> (SALTCODE_SANDBOX_IMAGE); firejail: not installed`
-
-The job dies there, **before `ruff`, `pyright` or `pytest` run at all**, so the CI
-signal for every task since Task 3 has been meaningless. Verified identical on base
-commit `5b6eb62e` (run 30334400417) and on PR #2 (run 30433261210).
-
-Nothing here is a code defect — detection is doing exactly what G-C07 made it do,
-correctly refusing to claim a containment it cannot deliver. The defect is in the
-**CI wiring**: the workflow installs bubblewrap and assumes it will work, but
-Ubuntu 24.04 runners apply an AppArmor restriction on unprivileged user namespaces.
-
-Candidate fixes, for whoever owns this (each needs a deliberate choice, so none was
-applied here):
-
-* `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` before the
-  containment step — the narrow, well-known unblock for Ubuntu 24.04 runners.
-* Configure `SALTCODE_SANDBOX_IMAGE` and let the Docker backend win, which would
-  also close **G-002** (the Docker path has still never launched a container).
-* Split the workflow so the non-containment lanes report independently — but note
-  Task 3 deliberately made CI *fail* rather than skip, so the security tests could
-  not pass by not running. That intent must be preserved.
-
-*Why it matters:* a lane that has been red for days is a lane nobody reads. Every
-"CI green" claim in this ledger since Task 3 rests on local runs, not on CI —
-and G-012 is sitting behind this one, invisible, because the job never gets far
-enough to hit it.
+**Sharpened by contrast, 2026-07-29.** With G-016 fixed, CI run 30434177585 ran the
+identical suite on a GitHub runner (cgroup v2 and systemd both present) and reported
+**325 passed, 0 failed, 0 skipped** — every one of the 9 passes there. Two things
+follow. The tests are sound, and Task 3's containment legs are now verified in CI
+rather than only on the maintainer's box. And the gap is now stated as sharply as it
+can be: the same `--check-containment` probe answers `contained` in **both**
+environments, while the resource limits bind in only one of them.
 
 ### - [ ] G-014 — The real embedding path is still unexercised
 **Severity:** MED · **Noticed:** Task 5 · **Closed by:** whoever first runs with
@@ -324,6 +267,47 @@ no skills behind it.
 ---
 
 ## Closed
+
+### - [x] G-016 — CI cannot run the containment suite: GitHub runners restrict userns
+**Closed 2026-07-29** · Noticed Task 5 (PR #2 CI run)
+
+The backend CI job had failed on every push to `main` since at least 2026-07-27,
+dying at `sandbox_apply --check-containment` with exit 3 before `ruff`, `pyright` or
+`pytest` ran at all — so the CI signal for every task since Task 3 was empty.
+`ubuntu-latest` is now Ubuntu 24.04, whose AppArmor profile blocks unprivileged user
+namespaces, so an installed `bwrap` could not create one and detection correctly
+refused (G-C07 working as designed).
+
+**Resolution (maintainer-approved, 2026-07-29):** `.github/workflows/ci.yml` sets
+`kernel.apparmor_restrict_unprivileged_userns=0` before the containment probe. This
+does not weaken the test — bwrap still creates a real namespace with the same bind
+layout, and REQ-SEC-005's refuse-if-no-backend path is untouched, so removing the
+step returns the job to failing closed, which is what Task 3 chose over skipping.
+
+**Verified: run 30434177585 — `325 passed in 67.19s`, 0 failed, 0 skipped, both
+lanes green.** A second, smaller defect surfaced only once the lane could run:
+`test_rm_rf_home_does_not_affect_the_host` asserted
+`TOOLCHAIN.relative_to(home)` unconditionally, which raises `ValueError` on any host
+whose `sys.prefix` sits outside `$HOME` — true of every GitHub runner
+(`/opt/hostedtoolcache/...` vs `/home/runner`). The tolerated entry is now admitted
+only when the toolchain really is under `$HOME`, making the assertion *stricter* on
+CI; REQ-SEC-001 AC1's canary and readable-contents checks are unchanged.
+
+### - [x] G-012 — `mcp` is unpinned, and `mcp` 2.0 breaks the LSP/AST server
+**Closed 2026-07-29** · Noticed Task 5 (baseline run)
+
+`pyproject.toml` declared `mcp>=0.1.0` with no upper bound, so a fresh install
+resolved **mcp 2.0.0**, which removed `mcp.server.fastmcp` and broke collection of
+`tests/test_task_4.py` and `tests/test_task_4_broker.py` (plus 10 `pyright --strict`
+errors). It was invisible in CI because the job died earlier still (G-016).
+
+**Resolution:** pinned to `mcp>=1,<2`; a clean resolution now selects 1.29.0. The
+bound is load-bearing, not caution — lift it only alongside a port to the 2.0 API,
+which belongs to whoever owns the MCP server. Verified by run 30434177585 collecting
+and passing both Task 4 modules.
+
+*Note:* this entry originally claimed CI was red **because of** this. It was not —
+the containment step (G-016) failed first. Both had to be fixed for a green lane.
 
 ### - [x] G-004 — Exact spec-cache hits will require `--scope`
 **Closed 2026-07-29** (as a deliberate decision) · Noticed Task 3.2
