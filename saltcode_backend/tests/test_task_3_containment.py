@@ -503,7 +503,19 @@ def test_rm_rf_home_does_not_affect_the_host(git_repo: Path, host_canary: Path) 
         # of the host home is readable, canary included.
         contents = result.stdout.partition("HOST HOME CONTENTS: ")[2].splitlines()[0]
         assert home_canary.name not in contents, f"host home contents were readable: {contents}"
-        assert contents in ("[]", f"['{TOOLCHAIN.relative_to(home).parts[0]}']"), contents
+
+        # Where the interpreter lives is a property of the host, not of Saltcode:
+        # under `$HOME` in a developer venv, but at `/opt/hostedtoolcache/...` on a
+        # GitHub runner. Only in the first case does bwrap have to create a directory
+        # under the home path in order to mount the toolchain, so only then is one
+        # entry tolerable. Off-home toolchains must show an empty home — a stricter
+        # assertion, not a looser one. (Previously `TOOLCHAIN.relative_to(home)` was
+        # unconditional and raised ValueError on any host whose toolchain sits
+        # outside `$HOME`, which is what kept this failing on CI.)
+        allowed = ["[]"]
+        if TOOLCHAIN.is_relative_to(home):
+            allowed.append(f"['{TOOLCHAIN.relative_to(home).parts[0]}']")
+        assert contents in allowed, f"{contents} (expected one of {allowed})"
     finally:
         home_canary.unlink(missing_ok=True)
 
