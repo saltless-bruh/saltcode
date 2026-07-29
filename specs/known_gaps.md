@@ -79,19 +79,6 @@ collected no tests, the gate reads PASS, and an unimplemented task ships. Task 9
 must decide how the spec reaches the sandbox (copy it in, commit it, or overlay
 it) and must treat "no tests collected" as a failure, not a pass.
 
-### - [ ] G-004 — Exact spec-cache hits will require `--scope`
-**Severity:** MED · **Noticed:** Task 3.2 · **Closed by:** Task 5.2 ·
-**Where:** `saltcode_backend/saltcode/memory/spec_cache.py`
-
-Store time hashes `sorted(tasks.json[*].files_affected)`; lookup time hashes the
-repo's module list. Those are different sets, so the two keys will rarely match
-and the exact cache will mostly miss unless the caller passes `--scope` (AC2).
-
-*Why it matters:* this is Trade C5 ("the scope-fingerprint key lowers hit rate —
-safer, accepted") landing in practice rather than a new defect. Task 5.2 should
-confirm it deliberately, and `/sprint` should make `--scope` easy to reuse
-between sprints, or the exact tier of the cache ladder earns nothing.
-
 ### - [ ] G-005 — The Auditor cannot vary temperature across stability passes
 **Severity:** MED · **Noticed:** Task 2.1 · **Closed by:** Task 10.1 ·
 **Where:** `saltcode_backend/saltcode/providers/local.py` (`LocalClient.chat`)
@@ -203,6 +190,81 @@ handler exists to verify the gating against.
 that works, right up until the tools never appear. Adoption is also a **trust
 decision** (REQ-SEC-006) — both run with full system permissions.
 
+### - [ ] G-012 — `mcp` is unpinned, and `mcp` 2.0 breaks the LSP/AST server
+**Severity:** HIGH · **Noticed:** Task 5 (baseline run) · **Closed by:** Task 20.1
+(or a pyproject pin) · **Where:** `saltcode_backend/pyproject.toml`,
+`saltcode_backend/saltcode/mcp/lsp_ast_server.py`
+
+`pyproject.toml` declares `mcp>=0.1.0` with no upper bound. A fresh
+`pip install -e ".[dev]"` today resolves **mcp 2.0.0**, which removed
+`mcp.server.fastmcp` (renamed to `mcp.server.mcpserver`). The import at
+`lsp_ast_server.py:9` then fails, which **breaks collection of
+`tests/test_task_4.py` and `tests/test_task_4_broker.py`** and adds 10
+`pyright --strict` errors. Pinning `mcp<2` in the local venv restores the API
+Task 4 was verified against and the suite collects again.
+
+*Why it matters:* CI runs `pip install -e ".[dev]"` on a clean runner every time,
+so **CI is red on `main` for a reason unrelated to any current task**, and the next
+person to run the suite will think they broke Task 4. The floor also silently
+re-resolves on every fresh install. Not fixed here because the pin is outside
+Task 5's scope and the alternative — porting `lsp_ast_server.py` to the 2.0 API —
+belongs to whoever owns the MCP server. **Recommendation: pin `mcp>=1,<2`.**
+
+### - [ ] G-013 — `bwrap` reports containment on a host where the limits do not bind
+**Severity:** MED · **Noticed:** Task 5 (baseline run) · **Closed by:** Task 9 or
+Task 20.3 · **Where:** `saltcode_backend/saltcode/harness/sandbox.py`
+
+On a container with no cgroup v2 (`/sys/fs/cgroup/cgroup.controllers` absent) and
+no running systemd, `sandbox_apply --check-containment` answers
+`{"backend":"bwrap","verdict":"contained"}` — but 9 of the Task 3 containment
+tests fail, including `test_timeout_kills_the_container`,
+`test_no_network_inside_the_container` and
+`test_the_host_filesystem_is_read_only_outside_the_sandbox`. The functional probe
+added for G-C07 checks that a namespace can be created; it does not check that the
+**resource limits** REQ-SEC-001 mandates actually bind, and `systemd-run` cannot
+create a scope without systemd.
+
+*Why it matters:* this is G-C07 one level deeper. Reporting `contained` when the
+memory, CPU and time ceilings are inert claims containment that does not exist —
+the same class of false green G-C07 closed for namespace creation. The probe should
+assert a limit binds (e.g. a small allocation under a small cap is killed), or the
+verdict should distinguish "isolated" from "isolated **and** limited".
+
+*Status here:* these 9 failures are **pre-existing and unrelated to Task 5** —
+recorded before any Task 5 change and byte-identical after. Task 3's legs were
+genuinely verified on the maintainer's box on 2026-07-28; they simply cannot be
+re-verified in this container.
+
+### - [ ] G-014 — The real embedding path is still unexercised
+**Severity:** MED · **Noticed:** Task 5 · **Closed by:** whoever first runs with
+Saltnitor up (Task 14b or Task 15.2) · **Where:**
+`saltcode_backend/saltcode/memory/*`, `providers/embeddings.py`
+
+Every Task 5 test drives embeddings through an in-process double or a loopback
+HTTP stub returning 3-dimensional orthogonal vectors. No test has embedded
+anything with a real `bge-small`/`nomic-embed`, because no embedding endpoint and
+no Saltnitor exist on this box (design §12's offline path is a mode, but the
+*endpoint* is still local infrastructure that has to be running).
+
+*Why it matters:* the orthogonal-axis double makes cosine similarity exactly 1.0
+or 0.0, which is what lets the PCD assertions be hand-computed — but it means the
+default `semantic_cosine_threshold` of 0.85 has never been exercised against a
+realistic similarity distribution, where the interesting cases sit between 0.7 and
+0.95. That is precisely what Task 14b's calibration is for; until then the
+semantic tier's behaviour on real vectors is modelled, not measured.
+
+### - [ ] G-015 — PCD scans the whole semantic cache on every lookup
+**Severity:** LOW · **Noticed:** Task 5.3 · **Closed by:** unassigned ·
+**Where:** `saltcode_backend/saltcode/memory/semantic_cache.py`
+
+`lookup_semantic_result` issues `.limit(total_specs)` because PCD's denominator is
+the entire cache — a top-k search cannot answer "what fraction lies within the
+radius". Cost is O(cache size) per lookup.
+
+*Why it matters:* nothing today; the cache holds one row per sprint. Worth knowing
+before anyone points this at a long-lived multi-project store, where a sampled or
+incrementally-maintained density estimate would be needed instead.
+
 ### - [ ] G-008 — `skills/` is an empty placeholder
 **Severity:** MED · **Noticed:** Task 0.2 · **Closed by:** Task 7.1c ·
 **Where:** `skills/`
@@ -219,6 +281,26 @@ no skills behind it.
 ---
 
 ## Closed
+
+### - [x] G-004 — Exact spec-cache hits will require `--scope`
+**Closed 2026-07-29** (as a deliberate decision) · Noticed Task 3.2
+
+Store time hashes `sorted(tasks.json[*].files_affected)`; lookup time hashes the
+repo's module list. Those are different sets, so the two keys rarely match and the
+exact tier mostly misses unless the caller passes `--scope` (REQ-CACHE-002 AC2).
+
+**Resolution (maintainer, 2026-07-29):** accepted as specified. REQ-CACHE-002 is
+unambiguous and Trade C5 explicitly buys this lower hit rate to avoid reusing the
+wrong plan — goal text alone collides on "rate-limit the LOGIN endpoint" vs
+"rate-limit the SIGNUP endpoint". The behaviour is unchanged; what changed is that
+it is no longer *invisible*: `lookup_spec_result` and the `cache_lookup` entrypoint
+now report `scope_fingerprint`, `scope_source ∈ {provided, probed, empty}` and the
+computed `key`, so a miss can be explained and `/sprint` (Task 8.1) can reuse a
+`--scope` between sprints. An unexplained miss is indistinguishable from a cache
+that is not wired up, which is what made this worth closing rather than leaving.
+Verified by `test_trade_c5_the_two_fingerprints_differ_by_design` (which asserts
+both the miss and the `--scope` recovery), `test_a_miss_explains_itself`, and
+`test_a_miss_reports_the_key_and_fingerprint_it_used` via subprocess.
 
 ### - [x] G-C01 — Privacy guard: was a LAN host inside or outside the boundary?
 **Closed 2026-07-28** · Noticed Task 2.4
