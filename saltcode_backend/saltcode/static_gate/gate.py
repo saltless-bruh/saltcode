@@ -52,7 +52,12 @@ class StaticGateReport:
         return self.verdict == "clean"
 
     def reason(self) -> str:
-        """The failure text fed back to the Builder on a DIRTY verdict."""
+        """The failure text fed back to the Builder on a DIRTY verdict.
+
+        `tool_error` runners are deliberately excluded: their output is the tool
+        complaining about its own config, and handing that to the Builder as a lint
+        reason invites it to "fix" code that was never wrong.
+        """
         failing = [r for r in self.runners if r.outcome in ("dirty", "timeout", "refused")]
         if not failing:
             return self.detail
@@ -103,6 +108,26 @@ def run_static_gate(
         run_static_runner(spec, sandbox=sandbox_path, workspace=workspace, backend=backend)
         for spec in specs
     ]
+
+    # Checked BEFORE `dirty`: a tool that failed on its own configuration never judged
+    # the code, so its verdict must not be attributed to the Builder even when another
+    # runner did legitimately report diagnostics. Getting this precedence backwards
+    # would let one broken config be laundered into "your code is wrong" by whichever
+    # runner happened to also fail.
+    tool_errors = [r for r in results if r.outcome == "tool_error"]
+    if tool_errors:
+        return StaticGateReport(
+            verdict="unavailable",
+            language=language,
+            strength=strength,
+            runners=results,
+            detail=(
+                f"the static gate could not evaluate the code: "
+                f"{', '.join(r.name for r in tool_errors)} failed on its own "
+                "configuration or invocation. This is a configuration problem for the "
+                "human, not a Builder retry."
+            ),
+        )
 
     if any(r.outcome in ("dirty", "timeout", "refused") for r in results):
         failed = [r.name for r in results if r.outcome in ("dirty", "timeout", "refused")]

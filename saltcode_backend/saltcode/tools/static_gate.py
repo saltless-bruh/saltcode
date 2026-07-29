@@ -60,14 +60,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def resolve_language(repo: Path, override: str | None) -> str:
-    """The language to gate on: the flag, else project config, else python."""
+    """The language to gate on: the flag, else project config, else python.
+
+    Only a *missing* config falls back. A malformed `saltcode.toml`, an unreadable
+    one, or one whose `language` fails validation propagates — the entrypoint turns
+    it into an internal error (exit 3). Swallowing those would gate a TypeScript repo
+    with `pyright` and report the result as if it meant something.
+    """
     if override is not None:
         return override
-    try:
-        from saltcode.mcp.lsp_backends import load_project_config
 
+    from saltcode.mcp.lsp_backends import load_project_config
+
+    try:
         return load_project_config(repo).language
-    except Exception:
+    except FileNotFoundError:
         # No config is not fatal — the gate reports `unavailable` for a language it
         # has no runners for, which is a verdict the caller can act on.
         return "python"

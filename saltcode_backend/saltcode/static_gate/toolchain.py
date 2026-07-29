@@ -39,6 +39,41 @@ class ToolchainBinding:
     and immediately fails to find itself."""
     bin_dir: Path
     """Prepended to the container's `PATH`."""
+    extra_bind_roots: tuple[Path, ...] = ()
+    """Further read-only binds the program needs to actually work.
+
+    Exists for rustup: `~/.cargo/bin/cargo` is not the compiler, it is a *proxy* that
+    delegates to the active toolchain under `RUSTUP_HOME` (default `~/.rustup`). Binding
+    only `~/.cargo` gives the container a `cargo` that starts and then cannot find any
+    toolchain — and Rust is a HARD gate (design §14), so it fails at the strongest link.
+    This project has been bitten by rustup's proxy indirection before: G-009 records
+    `command -v rust-analyzer` succeeding on a shim for an uninstalled component."""
+
+
+RUST_PROXY_PROGRAMS = frozenset({"cargo", "rustc", "rustdoc", "cargo-clippy", "clippy-driver"})
+"""Programs rustup installs as proxies rather than as the real binary."""
+
+
+def rustup_home() -> Path | None:
+    """The active Rustup home, or ``None`` when there is no rustup install.
+
+    `RUSTUP_HOME` wins when set; otherwise the documented default `~/.rustup`. Returned
+    only when it actually exists, so a non-Rust host adds no phantom bind.
+    """
+    configured = os.environ.get("RUSTUP_HOME")
+    if configured:
+        candidate = Path(configured)
+        return candidate if candidate.is_dir() else None
+    default = Path.home() / ".rustup"
+    return default if default.is_dir() else None
+
+
+def _extra_roots_for(program: str) -> tuple[Path, ...]:
+    """Binds a program needs beyond its own prefix."""
+    if program not in RUST_PROXY_PROGRAMS:
+        return ()
+    home = rustup_home()
+    return (home,) if home is not None else ()
 
 
 def _venv_bin() -> Path:
@@ -89,6 +124,7 @@ def resolve_tool(program: str, workspace: Path | str) -> ToolchainBinding | None
                 executable=resolved,
                 bind_root=_bind_root_for(resolved),
                 bin_dir=resolved.parent,
+                extra_bind_roots=_extra_roots_for(program),
             )
 
     found = shutil.which(program)
@@ -101,6 +137,7 @@ def resolve_tool(program: str, workspace: Path | str) -> ToolchainBinding | None
         executable=resolved,
         bind_root=_bind_root_for(resolved),
         bin_dir=resolved.parent,
+        extra_bind_roots=_extra_roots_for(program),
     )
 
 
@@ -131,8 +168,9 @@ def ro_binds_for(bindings: list[ToolchainBinding]) -> list[Path]:
     roots: list[Path] = []
     seen: set[str] = set()
     for binding in bindings:
-        key = str(binding.bind_root)
-        if key not in seen:
-            seen.add(key)
-            roots.append(binding.bind_root)
+        for root in (binding.bind_root, *binding.extra_bind_roots):
+            key = str(root)
+            if key not in seen:
+                seen.add(key)
+                roots.append(root)
     return roots

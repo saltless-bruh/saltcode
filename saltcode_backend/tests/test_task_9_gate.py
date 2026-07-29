@@ -28,6 +28,7 @@ from saltcode.static_gate.gate import run_static_gate
 from saltcode.static_gate.runners import (
     LANGUAGE_RUNNERS,
     LANGUAGE_STRENGTH,
+    TOOL_FAILURE_EXIT_CODES,
     RunnerSpec,
     _classify,
     run_static_runner,
@@ -555,3 +556,163 @@ def test_diff_check_accepts_a_valid_unified_diff(tmp_path: Path) -> None:
         check=False,
     )
     assert completed.returncode == EXIT_OK, completed.stdout
+
+
+# ============================================================================
+# Review follow-ups (CodeRabbit, 2026-07-29) — three findings, all confirmed
+# ============================================================================
+
+
+# --- a tool that fails on its own config is not a Builder failure -----------
+
+
+def test_tool_failure_exit_codes_are_the_verified_ones() -> None:
+    """Checked against the real binaries, not documentation.
+
+    pyright: 2 fatal, 3 unreadable config, 4 bad CLI args. ruff: 2 abnormal
+    termination. Both use 1 for diagnostics, the only code meaning "code is wrong".
+    """
+    assert TOOL_FAILURE_EXIT_CODES["pyright"] == frozenset({2, 3, 4})
+    assert TOOL_FAILURE_EXIT_CODES["ruff"] == frozenset({2})
+    assert 1 not in TOOL_FAILURE_EXIT_CODES["pyright"]
+    assert 1 not in TOOL_FAILURE_EXIT_CODES["ruff"]
+
+
+@pytest.mark.parametrize("code", [2, 3, 4])
+def test_a_pyright_config_failure_is_not_dirty(code: int) -> None:
+    """A malformed pyrightconfig.json must not be sent to the Builder as a lint error."""
+    spec = RunnerSpec("pyright", "pyright", ("pyright",))
+    result = _classify(ContainedResult(code, "", "bad config", "bwrap", "c1"), spec)
+    assert result.outcome == "tool_error"
+    assert "NOT a Builder failure" in result.detail
+
+
+def test_a_ruff_config_failure_is_not_dirty() -> None:
+    spec = RunnerSpec("ruff", "ruff", ("ruff", "check", "."))
+    assert _classify(ContainedResult(2, "", "bad config", "bwrap", "c1"), spec).outcome == "tool_error"
+
+
+def test_real_diagnostics_are_still_dirty() -> None:
+    """Exit 1 is the code being wrong — that must keep routing to the Builder."""
+    for program in ("pyright", "ruff"):
+        spec = RunnerSpec(program, program, (program,))
+        assert _classify(ContainedResult(1, "E501", "", "bwrap", "c1"), spec).outcome == "dirty"
+
+
+def test_an_unmapped_tool_keeps_the_previous_behaviour() -> None:
+    """Only empirically verified codes are mapped; the rest fall through (G-017)."""
+    spec = RunnerSpec("tsc", "tsc", ("tsc",))
+    assert _classify(ContainedResult(2, "", "", "bwrap", "c1"), spec).outcome == "dirty"
+
+
+def test_a_tool_error_makes_the_gate_unavailable_not_dirty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The verdict the Phase-2 loop branches on must not say 'Builder retry'."""
+    from saltcode.static_gate import gate as gate_module
+
+    def fake_runner(spec: RunnerSpec, **_: object) -> object:
+        code = 3 if spec.program == "pyright" else 0
+        return _classify(ContainedResult(code, "", "boom", "bwrap", "c1"), spec)
+
+    monkeypatch.setattr(gate_module, "run_static_runner", fake_runner)
+    report = gate_module.run_static_gate(Path("/tmp"), "python", workspace=Path("/tmp"))
+
+    assert report.verdict == "unavailable"
+    assert not report.clean
+    assert "configuration problem for the human" in report.detail
+
+
+def test_a_tool_error_wins_over_a_concurrent_dirty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Precedence matters: one broken config must not be laundered into 'code is wrong'."""
+    from saltcode.static_gate import gate as gate_module
+
+    def fake_runner(spec: RunnerSpec, **_: object) -> object:
+        code = 3 if spec.program == "pyright" else 1
+        return _classify(ContainedResult(code, "", "x", "bwrap", "c1"), spec)
+
+    monkeypatch.setattr(gate_module, "run_static_runner", fake_runner)
+    report = gate_module.run_static_gate(Path("/tmp"), "python", workspace=Path("/tmp"))
+
+    assert report.verdict == "unavailable"
+    assert "boom" not in report.reason()
+
+
+# --- rustup proxies need their toolchain bound ------------------------------
+
+
+def test_cargo_binds_the_rustup_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`~/.cargo/bin/cargo` is a proxy; the compiler lives under RUSTUP_HOME."""
+    cargo_bin = tmp_path / "cargo" / "bin"
+    cargo_bin.mkdir(parents=True)
+    cargo = cargo_bin / "cargo"
+    cargo.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    cargo.chmod(0o755)
+
+    rustup = tmp_path / "rustup"
+    (rustup / "toolchains").mkdir(parents=True)
+
+    monkeypatch.setenv("RUSTUP_HOME", str(rustup))
+    monkeypatch.setenv("PATH", str(cargo_bin))
+
+    binding = resolve_tool("cargo", tmp_path)
+    assert binding is not None
+    assert rustup in ro_binds_for([binding]), "the active toolchain must be reachable"
+    assert binding.bind_root in ro_binds_for([binding])
+
+
+def test_a_non_rust_tool_gains_no_rustup_bind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rustup = tmp_path / "rustup"
+    (rustup / "toolchains").mkdir(parents=True)
+    monkeypatch.setenv("RUSTUP_HOME", str(rustup))
+
+    binding = resolve_tool("ruff", tmp_path)
+    assert binding is not None
+    assert binding.extra_bind_roots == ()
+
+
+def test_a_host_without_rustup_adds_no_phantom_bind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cargo_bin = tmp_path / "cargo" / "bin"
+    cargo_bin.mkdir(parents=True)
+    cargo = cargo_bin / "cargo"
+    cargo.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    cargo.chmod(0o755)
+
+    monkeypatch.setenv("RUSTUP_HOME", str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv("PATH", str(cargo_bin))
+
+    binding = resolve_tool("cargo", tmp_path)
+    assert binding is not None
+    assert binding.extra_bind_roots == ()
+
+
+# --- config-load failures must not become silent defaults -------------------
+
+
+def test_a_malformed_config_is_an_error_not_a_python_default(tmp_path: Path) -> None:
+    """A broken saltcode.toml must not silently gate a repo as Python."""
+    (tmp_path / "saltcode.toml").write_text("[project\nlanguage = broken", encoding="utf-8")
+
+    code, payload = run_entrypoint("static_gate", "--sandbox", str(tmp_path), "--repo", str(tmp_path))
+    assert code == 3, payload
+    assert payload["ok"] is False
+
+
+def test_a_malformed_config_does_not_become_a_skipped_test_run(tmp_path: Path) -> None:
+    """The worse case: a config bug presenting as `skipped` at exit 0."""
+    (tmp_path / "saltcode.toml").write_text("[project\nlanguage = broken", encoding="utf-8")
+
+    code, payload = run_entrypoint(
+        "test_run", "--sandbox", str(tmp_path), "--repo", str(tmp_path), "--task", "T1"
+    )
+    assert code == 3, payload
+    assert payload.get("outcome") != "skipped"
+
+
+def test_a_missing_config_still_falls_back(tmp_path: Path) -> None:
+    """The legitimate case keeps working — narrowing must not break the default."""
+    code, payload = run_entrypoint(
+        "test_run", "--sandbox", str(tmp_path), "--repo", str(tmp_path), "--task", "T1"
+    )
+    assert code == EXIT_OK
+    assert payload["outcome"] == "skipped"

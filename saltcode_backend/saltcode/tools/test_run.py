@@ -59,14 +59,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def resolve_command(repo: Path, override: str | None) -> str | None:
-    """The test command: the flag if given (even empty), else project config."""
+    """The test command: the flag if given (even empty), else project config.
+
+    Only a *missing* config yields ``None``. A malformed or invalid one propagates to
+    an internal error (exit 3) rather than becoming ``None`` — which would present as
+    a legitimate `skipped` outcome at **exit 0**, i.e. a broken config silently
+    reported as "the tests were fine to skip". That is precisely the false green
+    REQ-STAT-004 AC3's skip must never be confused with.
+    """
     if override is not None:
         return override
-    try:
-        from saltcode.mcp.lsp_backends import load_project_config
 
+    from saltcode.mcp.lsp_backends import load_project_config
+
+    try:
         return load_project_config(repo).test_runner_cmd
-    except Exception:
+    except FileNotFoundError:
         return None
 
 

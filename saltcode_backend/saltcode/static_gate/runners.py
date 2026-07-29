@@ -37,7 +37,31 @@ from saltcode.static_gate.toolchain import (
 
 Language = Literal["python", "typescript", "javascript", "rust", "go"]
 GateStrength = Literal["HARD", "MEDIUM", "SOFT"]
-RunnerOutcome = Literal["clean", "dirty", "unavailable", "refused", "timeout"]
+RunnerOutcome = Literal["clean", "dirty", "unavailable", "tool_error", "refused", "timeout"]
+
+TOOL_FAILURE_EXIT_CODES: dict[str, frozenset[int]] = {
+    # Verified empirically against the installed binaries, not from documentation:
+    # pyright 2 = fatal error, 3 = config unreadable/unparseable, 4 = bad CLI args;
+    # ruff 2 = abnormal termination (invalid config, invalid CLI, internal panic).
+    # Both use 1 for actual diagnostics, which is the only code that means "the code
+    # is wrong".
+    "pyright": frozenset({2, 3, 4}),
+    "ruff": frozenset({2}),
+}
+"""Exit codes meaning *the tool itself* failed, not that the code is bad.
+
+Without this every non-zero exit reads as `dirty`, so a malformed `pyrightconfig.json`
+short-circuits to the **Builder** with "your code is broken". The Builder then spends
+the shared per-task budget of 3 (REQ-FAIL-001) rewriting code that was never wrong, and
+the task ends at FLAG HUMAN with a reason that points at the wrong thing entirely.
+
+This is the mirror of the `unavailable` rule below: a gate that could not evaluate the
+code is not `clean`, and it is not `dirty` either.
+
+Only entries verified on a real binary are listed. `tsc`, `eslint`, `cargo` and `go`
+have their own conventions that have not been exercised here — see `specs/known_gaps.md`
+G-017 — and absent entries simply fall through to `dirty`, which is the pre-existing
+behaviour rather than a guess."""
 
 
 @dataclass(frozen=True)
@@ -154,6 +178,22 @@ def _classify(result: ContainedResult, spec: RunnerSpec) -> RunnerResult:
             output=output,
             detail=f"{spec.name} reported no problems",
         )
+
+    if result.exit_code in TOOL_FAILURE_EXIT_CODES.get(spec.program, frozenset()):
+        return RunnerResult(
+            name=spec.name,
+            outcome="tool_error",
+            exit_code=result.exit_code,
+            output=output,
+            detail=(
+                f"{spec.name} failed on its own configuration or invocation "
+                f"(exit {result.exit_code}), so it never judged the code. This is a "
+                "Saltcode/project configuration problem, NOT a Builder failure — "
+                "routing it as `dirty` would spend the retry budget on code that was "
+                "never wrong."
+            ),
+        )
+
     return RunnerResult(
         name=spec.name,
         outcome="dirty",

@@ -260,6 +260,47 @@ radius". Cost is O(cache size) per lookup.
 before anyone points this at a long-lived multi-project store, where a sampled or
 incrementally-maintained density estimate would be needed instead.
 
+### - [ ] G-017 — Tool-failure exit codes are mapped only for pyright and ruff
+**Severity:** MED · **Noticed:** Task 9 (PR #2 review) · **Closed by:** Task 15.2 ·
+**Where:** `saltcode_backend/saltcode/static_gate/runners.py`
+(`TOOL_FAILURE_EXIT_CODES`)
+
+A static-analysis tool that fails on its *own* configuration must not be reported as
+`dirty`, because `dirty` routes to the Builder and spends the shared per-task budget of
+3 (REQ-FAIL-001) rewriting code that was never wrong. `pyright` (2 fatal, 3 unreadable
+config, 4 bad CLI args) and `ruff` (2 abnormal termination) are mapped, each verified by
+running the real binary rather than read from documentation.
+
+**`tsc`, `eslint`, `cargo` and `go` are not mapped.** Their conventions were not
+exercised on this host — no Node, Rust or Go toolchain is installed — so rather than
+guess, unmapped codes fall through to `dirty`, which is the pre-existing behaviour.
+
+*Why it matters:* a malformed `.eslintrc` or a `cargo` panic still presents to the
+Builder as "your code is broken", ending in FLAG HUMAN with a misleading reason. Task
+15.2 already plans per-language fixture variants; verifying each tool's failure codes
+there closes this. The cheap check is the one used here — run the tool against a
+deliberately broken config and read `$?`.
+
+### - [ ] G-018 — The Rust container path binds a toolchain nobody has run
+**Severity:** MED · **Noticed:** Task 9 (PR #2 review) · **Closed by:** Task 15.2 ·
+**Where:** `saltcode_backend/saltcode/static_gate/toolchain.py` (`rustup_home`)
+
+`~/.cargo/bin/cargo` is a rustup **proxy**, not the compiler; the real toolchain lives
+under `RUSTUP_HOME` (default `~/.rustup`). Binding only the proxy's prefix gave the
+container a `cargo` that starts and then finds no toolchain — and Rust is a HARD gate
+(design §14), so it failed at the strongest link. `resolve_tool` now adds the resolved
+rustup home as an extra read-only bind.
+
+**The fix is unverified end to end.** No Rust toolchain exists on this host (G-009
+records `rust-analyzer` as a rustup shim for an *uninstalled* component), so the tests
+construct a fake rustup layout and assert the bind list, not a real `cargo check` inside
+a container.
+
+*Why it matters:* the bind-list computation is proven, but whether a real contained
+`cargo check` succeeds is not. Rust's HARD gate is the one whose `clean` verdict the
+Auditor is told to trust most (REQ-STAT-002 AC2), so it is the worst one to have
+unexercised. Same fixture work as G-009 and G-017.
+
 ### - [ ] G-008 — `skills/` is an empty placeholder
 **Severity:** MED · **Noticed:** Task 0.2 · **Closed by:** Task 7.1c ·
 **Where:** `skills/`
