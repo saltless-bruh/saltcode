@@ -204,11 +204,16 @@ decision** (REQ-SEC-006) — both run with full system permissions.
 Task 4 was verified against and the suite collects again.
 
 *Why it matters:* CI runs `pip install -e ".[dev]"` on a clean runner every time,
-so **CI is red on `main` for a reason unrelated to any current task**, and the next
-person to run the suite will think they broke Task 4. The floor also silently
-re-resolves on every fresh install. Not fixed here because the pin is outside
-Task 5's scope and the alternative — porting `lsp_ast_server.py` to the 2.0 API —
-belongs to whoever owns the MCP server. **Recommendation: pin `mcp>=1,<2`.**
+and the run for PR #2 confirms it installed `mcp-2.0.0`. The floor silently
+re-resolves on every fresh install, so the next person to set up a dev environment
+will think they broke Task 4. Not fixed here because the pin is outside Task 5's
+scope and the alternative — porting `lsp_ast_server.py` to the 2.0 API — belongs to
+whoever owns the MCP server. **Recommendation: pin `mcp>=1,<2`.**
+
+*Correction (2026-07-29):* this entry first said CI was red **because of** this. It
+is not — the job dies earlier, at the containment step (**G-016**), and never
+reaches `pyright` or `pytest`. This is the *second* blocker to a green CI run, not
+the first. Both must be fixed for the backend lane to pass.
 
 ### - [ ] G-013 — `bwrap` reports containment on a host where the limits do not bind
 **Severity:** MED · **Noticed:** Task 5 (baseline run) · **Closed by:** Task 9 or
@@ -234,6 +239,44 @@ verdict should distinguish "isolated" from "isolated **and** limited".
 recorded before any Task 5 change and byte-identical after. Task 3's legs were
 genuinely verified on the maintainer's box on 2026-07-28; they simply cannot be
 re-verified in this container.
+
+### - [ ] G-016 — CI cannot run the containment suite: GitHub runners restrict userns
+**Severity:** HIGH · **Noticed:** Task 5 (PR #2 CI run) · **Closed by:** Task 0.4 /
+Task 3 CI wiring · **Where:** `.github/workflows/ci.yml`
+
+**The backend CI lane has failed on every push to `main` since at least
+2026-07-27** — 10 consecutive runs — and it is not any current task's doing. The
+workflow's third step, `python -m saltcode.tools.sandbox_apply --check-containment`,
+exits 3:
+
+> `bwrap: installed but cannot create a namespace (unprivileged user namespaces may
+> be restricted); docker: installed, but [sandbox] image is not configured
+> (SALTCODE_SANDBOX_IMAGE); firejail: not installed`
+
+The job dies there, **before `ruff`, `pyright` or `pytest` run at all**, so the CI
+signal for every task since Task 3 has been meaningless. Verified identical on base
+commit `5b6eb62e` (run 30334400417) and on PR #2 (run 30433261210).
+
+Nothing here is a code defect — detection is doing exactly what G-C07 made it do,
+correctly refusing to claim a containment it cannot deliver. The defect is in the
+**CI wiring**: the workflow installs bubblewrap and assumes it will work, but
+Ubuntu 24.04 runners apply an AppArmor restriction on unprivileged user namespaces.
+
+Candidate fixes, for whoever owns this (each needs a deliberate choice, so none was
+applied here):
+
+* `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` before the
+  containment step — the narrow, well-known unblock for Ubuntu 24.04 runners.
+* Configure `SALTCODE_SANDBOX_IMAGE` and let the Docker backend win, which would
+  also close **G-002** (the Docker path has still never launched a container).
+* Split the workflow so the non-containment lanes report independently — but note
+  Task 3 deliberately made CI *fail* rather than skip, so the security tests could
+  not pass by not running. That intent must be preserved.
+
+*Why it matters:* a lane that has been red for days is a lane nobody reads. Every
+"CI green" claim in this ledger since Task 3 rests on local runs, not on CI —
+and G-012 is sitting behind this one, invisible, because the job never gets far
+enough to hit it.
 
 ### - [ ] G-014 — The real embedding path is still unexercised
 **Severity:** MED · **Noticed:** Task 5 · **Closed by:** whoever first runs with
