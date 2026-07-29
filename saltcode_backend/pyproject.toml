@@ -9,7 +9,12 @@ dependencies = [
     "pydantic>=2.0",
     "lancedb>=0.12.0",
     "pyarrow>=15.0.0",
-    "mcp>=0.1.0",
+    # Upper bound is load-bearing, not caution: mcp 2.0 removed `mcp.server.fastmcp`
+    # (renamed to `mcp.server.mcpserver`), which `saltcode/mcp/lsp_ast_server.py`
+    # imports. The floor was previously unbounded, so a fresh install resolved 2.0.0
+    # and broke collection of both Task 4 test modules — invisibly, because CI died
+    # earlier still (G-012, G-016). Lift this only together with a port to the 2.0 API.
+    "mcp>=1,<2",
     "httpx>=0.25.0",
     "json-repair>=0.25.0",
     # Needed by contracts/tasks.py for the depends_on acyclicity check

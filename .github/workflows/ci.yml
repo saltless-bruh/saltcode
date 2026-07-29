@@ -30,6 +30,22 @@ jobs:
     - name: Install bubblewrap (security container backend)
       run: sudo apt-get update && sudo apt-get install -y bubblewrap
 
+    # Ubuntu 24.04 (which `ubuntu-latest` now is) ships an AppArmor profile that
+    # blocks unprivileged user namespaces, so an installed `bwrap` cannot create
+    # one. Detection then correctly refuses — it will not claim a containment it
+    # cannot deliver (G-C07) — and the containment step below exits 3, killing the
+    # job before ruff/pyright/pytest run at all. That is what left this lane red on
+    # every push since 2026-07-27 (G-016).
+    #
+    # This lifts the restriction for the runner only. It does NOT weaken what is
+    # being tested: bwrap still creates a real namespace with the same bind layout,
+    # and REQ-SEC-005's refuse-if-no-backend path stays intact — remove this step
+    # and the job goes back to failing closed, which is the behaviour Task 3 wanted.
+    - name: Allow unprivileged user namespaces (bubblewrap needs them)
+      run: |
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 \
+          || echo "sysctl not present on this runner; continuing to the containment probe"
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
