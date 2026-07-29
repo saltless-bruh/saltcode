@@ -262,10 +262,20 @@ def test_the_live_tree_is_unmodified_by_the_gate(python_repo: Path) -> None:
         run_static_gate(sandbox, "python", workspace=python_repo)
 
     assert (python_repo / "app.py").read_bytes() == before
+
+    # REQ-STAT-001 AC3 protects the *source* tree. `.saltcode/` is Saltcode's own
+    # bookkeeping — `run_in_container` appends every executed command to
+    # `.saltcode/audit_log.jsonl`, which REQ-SEC-003 requires — so its appearance is
+    # correct behaviour, not a breach. REQ-SEC-004 AC2 words the real boundary the
+    # same way: nothing *outside* `.saltcode/` may be modified.
     status = subprocess.run(
         ["git", "status", "--porcelain"], cwd=python_repo, capture_output=True, text=True, check=True
     )
-    assert status.stdout.strip() == ""
+    touched = [line[3:] for line in status.stdout.splitlines() if line.strip()]
+    assert [p for p in touched if not p.startswith(".saltcode/")] == [], touched
+    assert (python_repo / ".saltcode" / "audit_log.jsonl").exists(), (
+        "the gate must leave an audit trail (REQ-SEC-003)"
+    )
 
 
 # ---------------------------------------------------- 9.3 spec delivery (G-003)
