@@ -65,20 +65,6 @@ combination, and limit flags are all unverified in practice.
 *Why it matters:* Docker is the fallback when `bwrap` is unavailable — exactly
 the situation where nobody wants to discover the fallback is broken.
 
-### - [ ] G-003 — Uncommitted task specs will not exist in the sandbox
-**Severity:** HIGH · **Noticed:** Task 3.1 · **Closed by:** Task 9.3 ·
-**Where:** `saltcode_backend/saltcode/harness/sandbox.py` (`disposable_sandbox`)
-
-The sandbox is a git worktree checked out at `HEAD`. Test Intent writes
-`tests/task_{id}_spec.*` to the **live tree**, uncommitted (REQ-CON-004), so
-those files are simply absent from the worktree. The test runner will find
-nothing to run.
-
-*Why it matters:* left unhandled this is a false green — `pytest` exits 0 having
-collected no tests, the gate reads PASS, and an unimplemented task ships. Task 9.3
-must decide how the spec reaches the sandbox (copy it in, commit it, or overlay
-it) and must treat "no tests collected" as a failure, not a pass.
-
 ### - [ ] G-005 — The Auditor cannot vary temperature across stability passes
 **Severity:** MED · **Noticed:** Task 2.1 · **Closed by:** Task 10.1 ·
 **Where:** `saltcode_backend/saltcode/providers/local.py` (`LocalClient.chat`)
@@ -210,6 +196,29 @@ the same class of false green G-C07 closed for namespace creation. The probe sho
 assert a limit binds (e.g. a small allocation under a small cap is killed), or the
 verdict should distinguish "isolated" from "isolated **and** limited".
 
+**Sharpened 2026-07-29 (Task 9).** The cause is more specific, and worse, than "the
+limits do not bind". `sandbox.py::_limit_wrapper` decides whether to apply cgroup limits
+with `shutil.which("systemd-run")` — presence, not capability. Here the binary exists, so
+the wrapper returns the `systemd-run --user --scope` prefix and reports
+`limits_enforced=True`; but with no systemd bus that prefix fails at exec with
+`Failed to connect to bus: No medium found`, so **every contained command dies before its
+payload runs** while detection still reports `contained`. That is precisely the "trust
+`which` over capability" antipattern **G-C07 closed for bwrap detection**, surviving
+untouched in the limit wrapper.
+
+**Concrete fix available:** give `_limit_wrapper` the same cached functional probe G-C07
+gave backend detection — run `systemd-run --user --scope --quiet -- true` once and cache
+the result — and on failure return no prefix with `limits_enforced=False` rather than a
+prefix that cannot start. `ContainedResult.limits_enforced` already exists to express
+exactly that outcome, and is currently never false. This would make the containment path
+work on any host without systemd (Docker, most CI runners, this build container) instead
+of failing wholesale, while still reporting honestly that the ceilings are not enforced.
+**Left unapplied because `sandbox.py` is Task 3's module and Task 9 does not own it**
+(`.claude/rules/stop-and-ask.md`: adjacent breakage is reported, not fixed).
+
+Task 9 adds 6 more tests in the same position (the `@needs_container` ones in
+`tests/test_task_9_gate.py`), failing here for this reason and verified on CI.
+
 *Status here:* these 9 failures are **pre-existing and unrelated to Task 5** —
 recorded before any Task 5 change and byte-identical after.
 
@@ -267,6 +276,34 @@ no skills behind it.
 ---
 
 ## Closed
+
+### - [x] G-003 — Uncommitted task specs will not exist in the sandbox
+**Closed 2026-07-29** · Noticed Task 3.1 · Closed by Task 9.3
+
+The sandbox is a git worktree checked out at `HEAD`, but Test Intent writes
+`tests/task_{id}_spec.*` to the live tree and leaves it uncommitted (REQ-CON-004),
+so the spec was simply absent from the worktree and the runner would collect
+nothing — `pytest` exits 0, the gate reads PASS, and an unimplemented task ships.
+
+**Resolution (maintainer decision, 2026-07-29):** `test_runner.copy_spec_into_sandbox`
+copies just `tests/task_{id}_spec.*` into the sandbox before the run. Narrow, leaves
+git history untouched so the checkpoint commit stays the only task boundary, and
+matches the existing precedent of `apply_diff` writing its patch file in. Rejected:
+committing the specs (Test Intent emits all of them up front, so that commits every
+task's spec before any task passes) and bind-mounting the live `tests/` (exposes every
+task's spec to every run). Since REQ-BLD-003 bars the Builder from `tests/**`, copying
+is the only route that needs no commit.
+
+**The second half — "no tests collected" must be a failure — is closed too**, and was
+the sharper half. Exit codes alone cannot detect it: `pytest` signals it with **5**,
+but `cargo test` prints `running 0 tests` and `go test` prints `[no test files]` and
+*both exit 0*, so an exit-code check would have passed an empty run in two of the four
+frameworks. `looks_like_no_tests` matches the marker phrases as well as pytest's exit 5,
+and `TestRunReport.blocks_auditor` puts `no_tests` on the short-circuit path beside
+`fail`. Verified by `test_the_uncommitted_spec_reaches_the_sandbox`,
+`test_empty_runs_are_detected_across_frameworks` (6 framework phrasings),
+`test_a_missing_spec_is_a_failure_not_a_skip`, and end to end on CI by
+`test_an_empty_spec_file_is_a_failure_not_a_pass`.
 
 ### - [x] G-016 — CI cannot run the containment suite: GitHub runners restrict userns
 **Closed 2026-07-29** · Noticed Task 5 (PR #2 CI run)

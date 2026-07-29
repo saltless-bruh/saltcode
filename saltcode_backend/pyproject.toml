@@ -52,6 +52,15 @@ packages = [
     "saltcode.tools",
 ]
 
+[tool.pytest.ini_options]
+# Without this, pytest's default `test_*.py` discovery walks the *package* too and
+# collects `saltcode/static_gate/test_runner.py` — a production module whose name is
+# fixed by tasks.md 9.3 — as if it were a test file. It then scans it for `Test*`
+# classes and `test_*` functions, so a future helper named `test_something` there
+# would silently execute as part of the suite. The real suite lives entirely under
+# `tests/`; saying so removes the collision instead of renaming around it.
+testpaths = ["tests"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py311"
