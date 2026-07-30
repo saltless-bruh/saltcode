@@ -61,18 +61,16 @@ def _cache_key(workspace_path: Path | str, session_id: str) -> tuple[str, str]:
     return (str(Path(workspace_path).resolve()), session_id)
 
 
-def read_frozen_notes(
-    workspace_path: Path | str, session_id: str = DEFAULT_SESSION_ID
+def _read_frozen_from_disk(
+    workspace_path: Path | str, session_id: str
 ) -> list[str] | None:
-    """The frozen set for this session, or ``None`` if this session has not frozen one.
+    """Read this session's frozen set from disk **without touching the cache**.
 
-    A file written by a *different* session is not this session's freeze, so it reads
-    as absent — that is what makes a new session re-RAG.
+    Separate from :func:`read_frozen_notes` because a *query* with a side effect
+    cannot safely be used as a probe inside a mutator: `clear_session_notes` needs
+    to ask "is this freeze mine?" without re-populating the very cache entry it is
+    about to drop.
     """
-    cached = _in_process_cache.get(_cache_key(workspace_path, session_id))
-    if cached is not None:
-        return list(cached)
-
     path = frozen_notes_path(workspace_path)
     if not path.exists():
         return None
@@ -91,7 +89,26 @@ def read_frozen_notes(
     if not isinstance(notes_raw, list):
         return None
 
-    notes = [str(n) for n in cast("list[Any]", notes_raw)][:MAX_NOTES]
+    return [str(n) for n in cast("list[Any]", notes_raw)][:MAX_NOTES]
+
+
+def read_frozen_notes(
+    workspace_path: Path | str, session_id: str = DEFAULT_SESSION_ID
+) -> list[str] | None:
+    """The frozen set for this session, or ``None`` if this session has not frozen one.
+
+    A file written by a *different* session is not this session's freeze, so it reads
+    as absent — that is what makes a new session re-RAG. A successful disk read is
+    memoised in the process cache.
+    """
+    cached = _in_process_cache.get(_cache_key(workspace_path, session_id))
+    if cached is not None:
+        return list(cached)
+
+    notes = _read_frozen_from_disk(workspace_path, session_id)
+    if notes is None:
+        return None
+
     _in_process_cache[_cache_key(workspace_path, session_id)] = list(notes)
     return notes
 
@@ -136,7 +153,12 @@ def clear_session_notes(
     path = frozen_notes_path(workspace_path)
     if not path.exists():
         return
-    if session_id is not None and read_frozen_notes(workspace_path, session_id) is None:
+    # Deliberately the NON-caching read: `read_frozen_notes` memoises on success, so
+    # using it as the ownership probe would re-populate the very key the loop above
+    # just dropped, and `unlink` would then leave a cache entry with no file behind
+    # it — `initialize_session_notes` would return the stale frozen set instead of
+    # re-RAGing, so the thaw would silently not happen.
+    if session_id is not None and _read_frozen_from_disk(workspace_path, session_id) is None:
         # A freeze belonging to a different session is not ours to delete.
         return
     path.unlink()

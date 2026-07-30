@@ -25,6 +25,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from saltcode.contracts.io import expected_major_version, major_of
 from saltcode.contracts.tasks import TasksFile
 from saltcode.harness.phase_gate import compute_spec_hash
 from saltcode.harness.scope_probe import run_scope_probe
@@ -167,8 +168,10 @@ def _load_cached_tasks(row: dict[str, Any]) -> tuple[TasksFile | None, str]:
         return None, "cached entry is not a JSON object"
 
     typed = cast("dict[str, Any]", data)
-    expected_major = str(TasksFile.model_fields["schema_version"].default or "1").split(".")[0]
-    found_major = str(typed.get("schema_version", "1")).split(".")[0]
+    # Shared with contracts/io.py so the cache reader and the on-disk contract reader
+    # cannot drift, and so neither trips over PydanticUndefined being truthy.
+    expected_major = expected_major_version(TasksFile)
+    found_major = major_of(typed.get("schema_version", "1"))
     if found_major != expected_major:
         return None, (
             f"cached entry has unsupported major schema_version '{found_major}' "

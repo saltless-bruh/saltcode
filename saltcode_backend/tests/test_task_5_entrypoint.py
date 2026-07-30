@@ -356,3 +356,39 @@ def test_calibrated_thresholds_are_reported_as_such(tmp_path: Path) -> None:
     assert payload["thresholds"]["fully_calibrated"] is True
     assert payload["thresholds"]["values"]["semantic_cosine_threshold"]["source"] == "calibration"
     assert "UNCALIBRATED" not in stderr
+
+
+# ============================================================================
+# Review follow-up (CodeRabbit, 2026-07-29) — argparse success exit codes
+# ============================================================================
+
+ENTRYPOINTS = [
+    "validate_contract", "diff_check", "scope_probe", "connectivity",
+    "sandbox_apply", "cache_lookup", "static_gate", "test_run", "compact_spec",
+]
+
+
+@pytest.mark.parametrize("module", ENTRYPOINTS)
+def test_help_exits_zero_not_as_a_usage_error(module: str) -> None:
+    """`--help` succeeds; only a real parse error is exit 2.
+
+    `parse_args` raises SystemExit(0) for `--help`, and catching SystemExit
+    unconditionally reported that success as the documented usage-error code. A
+    caller shelling out to discover a tool's interface would read it as a failure.
+    """
+    completed = subprocess.run(
+        [sys.executable, "-m", f"saltcode.tools.{module}", "--help"],
+        capture_output=True, text=True, cwd=REPO_ROOT, timeout=180, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "usage:" in completed.stdout.lower()
+
+
+@pytest.mark.parametrize("module", ENTRYPOINTS)
+def test_an_unknown_flag_is_still_a_usage_error(module: str) -> None:
+    """The narrowing must not lose the real case."""
+    completed = subprocess.run(
+        [sys.executable, "-m", f"saltcode.tools.{module}", "--definitely-not-a-flag"],
+        capture_output=True, text=True, cwd=REPO_ROOT, timeout=180, check=False,
+    )
+    assert completed.returncode == 2, completed.stdout

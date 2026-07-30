@@ -41,10 +41,10 @@ from saltcode.harness.sandbox import (
 from saltcode.tools._cli import (
     EXIT_ERROR,
     EXIT_OK,
-    EXIT_USAGE,
     EXIT_VERDICT_NEGATIVE,
     STDIN_SENTINEL,
     emit,
+    exit_code_for,
     fail,
     read_payload,
 )
@@ -91,8 +91,9 @@ def run(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
-    except SystemExit:
-        return EXIT_USAGE
+    except SystemExit as exc:
+        # `--help` exits 0; only a real parse error is a usage error.
+        return exit_code_for(exc)
 
     if args.check_containment:
         try:

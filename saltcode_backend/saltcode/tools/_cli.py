@@ -76,3 +76,17 @@ def read_payload(source: str) -> str:
     from pathlib import Path
 
     return Path(source).read_text(encoding="utf-8")
+
+
+def exit_code_for(exc: SystemExit) -> int:
+    """Map an ``argparse``-raised :class:`SystemExit` to our exit-code scheme.
+
+    ``parse_args`` raises ``SystemExit(0)`` for ``-h``/``--help`` and ``SystemExit(2)``
+    for a genuine parse error. Catching it unconditionally and returning
+    :data:`EXIT_USAGE` reports a *successful* ``--help`` as a usage error, which any
+    caller shelling out to discover a tool's interface would read as a failure.
+
+    ``SystemExit.code`` may also be ``None`` (a bare ``sys.exit()``) or a string; both
+    mean "not one of our codes", so they collapse to :data:`EXIT_USAGE`.
+    """
+    return exc.code if isinstance(exc.code, int) else EXIT_USAGE

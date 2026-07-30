@@ -324,3 +324,56 @@ def test_skill_metadata_round_trips(tmp_path: Path, embedding: AxisEmbedding) ->
     add_skill(tmp_path, "Auth Review", "body", {"description": "auth", "owner": "scout"}, embedding)
     results = search_skills(tmp_path, "auth", limit=1, embedding_client=embedding)
     assert results[0]["metadata"]["owner"] == "scout"
+
+
+# ============================================================================
+# Review follow-ups (CodeRabbit, 2026-07-29)
+# ============================================================================
+
+
+def test_clearing_a_named_session_actually_thaws_it(
+    tmp_path: Path, embedding: AxisEmbedding
+) -> None:
+    """The ownership guard must not re-cache the key it is about to delete.
+
+    `clear_session_notes` dropped the in-process key, then called the *caching*
+    `read_frozen_notes` to check ownership — which put the key straight back — and
+    then unlinked the file. The cache outlived the file, so the thaw silently did
+    not happen inside that interpreter.
+    """
+    add_note(tmp_path, "auth note one", None, embedding)
+    first = initialize_session_notes(tmp_path, "auth", embedding, session_id="s1")
+    assert first == ["auth note one"]
+
+    clear_session_notes(tmp_path, session_id="s1")
+
+    assert not frozen_notes_path(tmp_path).exists()
+    assert get_frozen_notes(tmp_path, "s1") is None, "the in-process cache outlived the file"
+
+
+def test_a_thawed_session_re_rags_in_the_same_process(
+    tmp_path: Path, embedding: AxisEmbedding
+) -> None:
+    """The consequence that actually bites: a stale cache returns the OLD frozen set."""
+    add_note(tmp_path, "auth note one", None, embedding)
+    initialize_session_notes(tmp_path, "auth", embedding, session_id="s1")
+
+    clear_session_notes(tmp_path, session_id="s1")
+    add_note(tmp_path, "auth note two", None, embedding)
+
+    refrozen = initialize_session_notes(tmp_path, "auth", embedding, session_id="s1")
+    assert len(refrozen) == 2, f"expected a genuine re-RAG, got {refrozen}"
+
+
+def test_clearing_a_foreign_session_leaves_it_alone(
+    tmp_path: Path, embedding: AxisEmbedding
+) -> None:
+    """The guard's actual purpose must survive the fix."""
+    add_note(tmp_path, "auth note", None, embedding)
+    initialize_session_notes(tmp_path, "auth", embedding, session_id="mine")
+
+    clear_session_notes(tmp_path, session_id="someone-elses")
+
+    assert frozen_notes_path(tmp_path).exists()
+    clear_session_notes()  # drop the process cache only
+    assert read_frozen_notes(tmp_path, "mine") == ["auth note"]

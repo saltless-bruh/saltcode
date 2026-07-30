@@ -45,6 +45,7 @@ from saltcode.tools._cli import (
     EXIT_USAGE,
     EXIT_VERDICT_NEGATIVE,
     emit,
+    exit_code_for,
     fail,
 )
 
@@ -104,8 +105,9 @@ def run(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
-    except SystemExit:
-        return EXIT_USAGE
+    except SystemExit as exc:
+        # `--help` exits 0; only a real parse error is a usage error.
+        return exit_code_for(exc)
 
     if not args.goal.strip():
         return fail(TOOL, "InputError", "--goal must not be empty", code=EXIT_USAGE)

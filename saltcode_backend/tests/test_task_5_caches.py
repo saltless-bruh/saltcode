@@ -602,3 +602,85 @@ def test_write_store_meta_round_trips(tmp_path: Path) -> None:
     assert meta is not None
     assert meta["dimension"] == 384
     assert meta["embedding_model"] == "bge-small"
+
+
+# ============================================================================
+# Review follow-ups (CodeRabbit, 2026-07-29)
+# ============================================================================
+
+
+def test_semantic_deletes_never_interpolate_goal_text(
+    tmp_path: Path, embedding: AxisEmbedding
+) -> None:
+    """A goal full of quotes must not corrupt the delete predicate.
+
+    `spec_cache` had always keyed on a hex digest for exactly this reason; the
+    semantic tier was interpolating raw goal text with hand-rolled quote doubling.
+    """
+    from saltcode.memory.semantic_cache import semantic_row_key
+
+    nasty = "auth' OR '1'='1 -- \\ \" ;drop"
+    tasks = one_task_file()
+
+    store_semantic_spec(tmp_path, nasty, ["src/auth.py"], tasks, embedding)
+    store_semantic_spec(tmp_path, nasty, ["src/auth.py"], tasks, embedding)
+
+    result = lookup_semantic_result(tmp_path, nasty, ["src/auth.py"], embedding)
+    assert result.cache_size == 1, "re-storing must replace, not stack duplicates"
+
+    key = semantic_row_key(nasty, ["src/auth.py"])
+    assert len(key) == 64 and all(c in "0123456789abcdef" for c in key)
+
+
+def test_the_row_key_is_stable_and_scope_order_independent() -> None:
+    from saltcode.memory.semantic_cache import semantic_row_key
+
+    assert semantic_row_key("Goal", ["b.py", "a.py"]) == semantic_row_key("  goal  ", ["a.py", "b.py"])
+    assert semantic_row_key("goal a", ["x.py"]) != semantic_row_key("goal b", ["x.py"])
+
+
+def test_a_store_from_an_older_layout_is_reported_not_silently_used(
+    tmp_path: Path, embedding: AxisEmbedding
+) -> None:
+    """A schema bump must be visible, and must not delete the operator's data."""
+    from saltcode.memory.lancedb_store import StoreSchemaVersionMismatchError
+
+    init_db(tmp_path, embedding)
+    meta_path = tmp_path / ".saltcode" / "cache" / "lancedb" / "_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["schema_version"] = "1"
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    with pytest.raises(StoreSchemaVersionMismatchError) as excinfo:
+        init_db(tmp_path, embedding)
+    assert "delete" in str(excinfo.value).lower()
+    assert meta_path.exists(), "the store must not be removed on our own initiative"
+
+
+def test_creating_a_table_twice_is_not_an_error(tmp_path: Path, embedding: AxisEmbedding) -> None:
+    """`name not in db` then `create_table` is check-then-act; entrypoints are processes."""
+    import lancedb
+
+    from saltcode.memory.lancedb_store import _spec_cache_schema, get_db_path
+
+    init_db(tmp_path, embedding)
+    db: Any = lancedb.connect(str(get_db_path(tmp_path)))
+    db.create_table(SPEC_CACHE_TABLE, schema=_spec_cache_schema(), exist_ok=True)
+
+
+def test_the_expected_major_survives_a_field_without_a_default() -> None:
+    """`model_fields[...].default` is PydanticUndefined — truthy — when absent.
+
+    Reading it naively yields the literal string "PydanticUndefined", which would
+    reject every cached row as unsupported.
+    """
+    from pydantic import BaseModel
+
+    from saltcode.contracts.io import expected_major_version, major_of
+
+    class NoDefault(BaseModel):
+        schema_version: str
+
+    assert expected_major_version(NoDefault) == "1"
+    assert major_of("2.7") == "2"
+    assert major_of(None) == "1"

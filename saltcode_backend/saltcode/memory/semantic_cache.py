@@ -21,6 +21,7 @@ because it looks like an off-by-one and is not.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Literal
@@ -50,6 +51,19 @@ def get_semantic_query(goal: str, scope: list[str]) -> str:
     normalized_goal = goal.strip().lower()
     scope_str = ",".join(sorted(scope))
     return f"{normalized_goal}:{scope_str}"
+
+
+def semantic_row_key(goal: str, scope: list[str]) -> str:
+    """The row's identity: a sha256 of the same text that gets embedded.
+
+    Deletes filter on this rather than on the goal and scope columns. A LanceDB
+    delete takes a SQL predicate string, and goal text is free-form: the previous
+    version interpolated it with hand-rolled `\'` doubling, which is a quoting
+    scheme rather than a guarantee. A hex digest has no character that can end a
+    string literal, which is exactly the reasoning `spec_cache` already applied to
+    its own key — the two tiers now agree.
+    """
+    return hashlib.sha256(get_semantic_query(goal, scope).encode("utf-8")).hexdigest()
 
 
 def confirmation_for_pcd(pcd: float, thresholds: Thresholds) -> Confirmation:
@@ -98,16 +112,17 @@ def store_semantic_spec(
     table: Any = db.open_table(SEMANTIC_CACHE_TABLE)
 
     scope_fingerprint = ",".join(sorted(scope))
-    escaped_goal = goal.replace("'", "''")
-    escaped_scope = scope_fingerprint.replace("'", "''")
+    key = semantic_row_key(goal, scope)
 
     # Replace rather than accumulate: re-planning the same goal over the same scope
-    # must not stack duplicate rows, which would also skew the PCD denominator.
-    table.delete(f"goal = '{escaped_goal}' AND scope_fingerprint = '{escaped_scope}'")
+    # must not stack duplicate rows, which would also skew the PCD denominator. The
+    # predicate carries only a hex digest, never the goal text.
+    table.delete(f"key = '{key}'")
 
     table.add(
         [
             {
+                "key": key,
                 "vector": vector,
                 "goal": goal,
                 "scope_fingerprint": scope_fingerprint,

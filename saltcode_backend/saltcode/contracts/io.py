@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
+from pydantic_core import PydanticUndefined
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -17,6 +18,33 @@ class UnsupportedSchemaVersionError(ContractIOError):
 
 class ContractLoadError(ContractIOError):
     """Exception raised when loading/validating a contract fails."""
+
+
+def expected_major_version(model_class: type[BaseModel]) -> str:
+    """The major `schema_version` this build accepts for `model_class`.
+
+    The single source of truth for REQ-GLB-005's "readers reject unknown major
+    versions" rule, so the on-disk contract reader and the cache readers cannot
+    drift apart.
+
+    Reading the model's `Field` default is deliberately guarded: `model_fields[...]
+    .default` is `PydanticUndefined` — **not** `None` — when a field has no default,
+    and `PydanticUndefined` is *truthy*, so a naive `default or "1"` yields the
+    string `"PydanticUndefined"` and every stored record is rejected as unsupported.
+    """
+    field = model_class.model_fields.get("schema_version")
+    if field is None:
+        return "1"
+
+    default = field.default
+    if default is None or default is PydanticUndefined or not isinstance(default, str):
+        return "1"
+    return default.split(".")[0]
+
+
+def major_of(version: object) -> str:
+    """The major component of a `schema_version` value read from disk."""
+    return str(version if version is not None else "1").split(".")[0]
 
 
 def load_contract(filepath: Path | str, model_class: type[T]) -> T:
@@ -34,19 +62,9 @@ def load_contract(filepath: Path | str, model_class: type[T]) -> T:
     except Exception as e:
         raise ContractLoadError(f"Failed to read or parse JSON from {path}: {e}") from e
 
-    # Extract default schema_version from model_class field if it exists
-    expected_version = "1"
-    if "schema_version" in model_class.model_fields:
-        field_info = model_class.model_fields["schema_version"]
-        if field_info.default is not None:
-            expected_version = str(field_info.default)
+    major_expected = expected_major_version(model_class)
+    major_loaded = major_of(data.get("schema_version", "1"))
 
-    loaded_version = str(data.get("schema_version", "1"))
-    
-    # Compare major versions
-    major_loaded = loaded_version.split(".")[0]
-    major_expected = expected_version.split(".")[0]
-    
     if major_loaded != major_expected:
         raise UnsupportedSchemaVersionError(
             f"Unsupported major schema version '{major_loaded}' (expected '{major_expected}') in contract {path}."

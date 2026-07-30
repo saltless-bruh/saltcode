@@ -33,8 +33,8 @@ from saltcode.harness.scope_probe import run_scope_probe
 from saltcode.tools._cli import (
     EXIT_ERROR,
     EXIT_OK,
-    EXIT_USAGE,
     emit,
+    exit_code_for,
     fail,
 )
 
@@ -69,8 +69,9 @@ def run(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
-    except SystemExit:
-        return EXIT_USAGE
+    except SystemExit as exc:
+        # `--help` exits 0; only a real parse error is a usage error.
+        return exit_code_for(exc)
 
     if args.scope:
         # Sorted, because the fingerprint is order-independent and the caller's

@@ -48,8 +48,13 @@ unknown member. Going through one explicitly-``Any`` alias keeps the strict lane
 without scattering per-line suppressions, and matches how this package already handles
 the equally untyped LanceDB surface."""
 
-STORE_SCHEMA_VERSION = "1"
-"""Bumped only when the table layout changes incompatibly."""
+STORE_SCHEMA_VERSION = "2"
+"""Bumped only when the table layout changes incompatibly.
+
+**2** — `semantic_cache` gained a `key` column so its row identity is a hex digest.
+Deletes previously interpolated the raw goal text into a LanceDB SQL predicate with
+hand-rolled quote doubling; `spec_cache` had always keyed on a digest for exactly this
+reason, and the two tiers now agree."""
 
 SPEC_CACHE_TABLE = "spec_cache"
 SEMANTIC_CACHE_TABLE = "semantic_cache"
@@ -72,6 +77,14 @@ class EmbeddingDimensionUnavailableError(MemoryStoreError):
     Raised instead of defaulting to a plausible constant: a store built at the wrong
     width accepts no vectors from the real model, and the failure surfaces far from
     its cause.
+    """
+
+
+class StoreSchemaVersionMismatchError(MemoryStoreError):
+    """The store on disk was built by a different major layout of this package.
+
+    Reported rather than silently rebuilt: the cache is cheap to regenerate, but
+    deleting a user's directory without being asked is not this code's decision.
     """
 
 
@@ -226,6 +239,9 @@ def _spec_cache_schema() -> Any:
 def _semantic_cache_schema(dimension: int) -> Any:
     return _pa.schema(
         [
+            # A sha256 of the normalized goal+scope. Row identity is a hex digest so
+            # deletes never interpolate free text into a SQL predicate.
+            _pa.field("key", _pa.string()),
             _pa.field("vector", _pa.list_(_pa.float32(), list_size=dimension)),
             _pa.field("goal", _pa.string()),
             _pa.field("scope_fingerprint", _pa.string()),
@@ -282,9 +298,23 @@ def init_db(
     db_path.mkdir(parents=True, exist_ok=True)
     db: Any = lancedb.connect(str(db_path))
 
+    meta = read_store_meta(workspace_path)
+    if meta is not None:
+        found = str(meta.get("schema_version", "1"))
+        if found != STORE_SCHEMA_VERSION:
+            raise StoreSchemaVersionMismatchError(
+                f"This cache was built with store schema {found!r} but this build uses "
+                f"{STORE_SCHEMA_VERSION!r}. The cache is safe to regenerate — delete "
+                f"{db_path} and it will be rebuilt on the next sprint — but nothing here "
+                "will remove it for you."
+            )
+
     if SPEC_CACHE_TABLE not in db:
-        # No vectors, so no dimension needed.
-        db.create_table(SPEC_CACHE_TABLE, schema=_spec_cache_schema())
+        # No vectors, so no dimension needed. `exist_ok` because `name not in db`
+        # followed by `create_table` is a check-then-act, and the entrypoints run as
+        # separate processes (`pi.exec`) — two first-use lookups on one workspace can
+        # both see the table missing, and the loser would raise instead of reading.
+        db.create_table(SPEC_CACHE_TABLE, schema=_spec_cache_schema(), exist_ok=True)
 
     if not vectors:
         return db
@@ -303,7 +333,7 @@ def init_db(
         SKILLS_TABLE: _skills_schema,
     }
     for name in missing:
-        db.create_table(name, schema=builders[name](dimension))
+        db.create_table(name, schema=builders[name](dimension), exist_ok=True)
 
     if read_store_meta(workspace_path) is None:
         write_store_meta(workspace_path, dimension, _embedding_model_name(embedding_client))
