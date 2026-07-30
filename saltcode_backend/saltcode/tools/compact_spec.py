@@ -24,7 +24,9 @@ would have altered the constraints block, ``2`` usage, ``3`` internal. The refus
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -138,18 +140,39 @@ def run(argv: Sequence[str] | None = None) -> int:
         )
         return EXIT_VERDICT_NEGATIVE
 
+    changed = result.content != content
     written = False
-    if not args.dry_run and result.content != content:
+    if not args.dry_run and changed:
+        # Atomic: write a sibling temp file and rename over the target. A truncating
+        # in-place write that dies partway (crash, disk full) leaves design.md
+        # corrupted — potentially with a half-written `## HARD CONSTRAINTS` block,
+        # which is the single outcome this module exists to make impossible. Same
+        # pattern as `contracts/io.py::save_contract`.
+        temp_name: str | None = None
         try:
-            design_path.write_text(result.content, encoding="utf-8")
+            with tempfile.NamedTemporaryFile(
+                "w", dir=design_path.parent, delete=False, encoding="utf-8"
+            ) as handle:
+                temp_name = handle.name
+                handle.write(result.content)
+            Path(temp_name).replace(design_path)
             written = True
         except OSError as exc:
+            # `temp_name` stays None when the failure was opening the temp file itself
+            # (a read-only directory), so the cleanup must not assume it was assigned.
+            if temp_name is not None:
+                with contextlib.suppress(OSError):
+                    Path(temp_name).unlink()
             return fail(TOOL, "IOError", f"could not write {args.design}: {exc}", code=EXIT_ERROR)
 
     payload: dict[str, Any] = {
         "tool": TOOL,
         "ok": True,
-        "verdict": "compacted" if result.bytes_saved else "no_change",
+        # Derived from the same condition as `written`. Deriving it from
+        # `bytes_saved` (a length delta) let a same-length rewrite report
+        # "no_change" while `written` was True — a self-contradictory payload for
+        # whatever automation consumes this JSON.
+        "verdict": "compacted" if changed else "no_change",
         "written": written,
         "dry_run": bool(args.dry_run),
         "constraints_chars": len(before.text),

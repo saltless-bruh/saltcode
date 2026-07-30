@@ -48,6 +48,15 @@ class ToolchainBinding:
     toolchain — and Rust is a HARD gate (design §14), so it fails at the strongest link.
     This project has been bitten by rustup's proxy indirection before: G-009 records
     `command -v rust-analyzer` succeeding on a shim for an uninstalled component."""
+    extra_env: tuple[tuple[str, str], ...] = ()
+    """Environment the program needs on top of :data:`CONTAINER_ENV`.
+
+    Binding the toolchain in is only half of the rustup fix. `CONTAINER_ENV` *replaces*
+    the environment rather than extending it (REQ-SEC-001: the host's carries tokens and
+    proxies), and container `HOME` is `/tmp/saltcode-home` — so the proxy's fallback to
+    `$HOME/.rustup` resolves to a path that does not exist inside the container even on
+    a host using rustup's default location. `RUSTUP_HOME` therefore has to be passed
+    explicitly whenever a rustup home was found and bound, default location included."""
 
 
 RUST_PROXY_PROGRAMS = frozenset({"cargo", "rustc", "rustdoc", "cargo-clippy", "clippy-driver"})
@@ -69,11 +78,28 @@ def rustup_home() -> Path | None:
 
 
 def _extra_roots_for(program: str) -> tuple[Path, ...]:
-    """Binds a program needs beyond its own prefix."""
+    """Binds a program needs beyond its own prefix.
+
+    `program` must be a bare name — see :func:`resolve_tool`, which normalises a
+    path-qualified `test_runner_cmd` argv[0] before calling here.
+    """
     if program not in RUST_PROXY_PROGRAMS:
         return ()
     home = rustup_home()
     return (home,) if home is not None else ()
+
+
+def _extra_env_for(program: str) -> tuple[tuple[str, str], ...]:
+    """Environment a program needs inside the container, beyond `CONTAINER_ENV`.
+
+    Paired with :func:`_extra_roots_for`: the bind makes the toolchain *reachable*,
+    this makes it *findable*. Set only when a rustup home was actually resolved, so a
+    non-Rust host adds nothing.
+    """
+    if program not in RUST_PROXY_PROGRAMS:
+        return ()
+    home = rustup_home()
+    return (("RUSTUP_HOME", str(home)),) if home is not None else ()
 
 
 def _venv_bin() -> Path:
@@ -114,7 +140,14 @@ def resolve_tool(program: str, workspace: Path | str) -> ToolchainBinding | None
     reported "tool not available" from the gate rather than a container that fails
     to exec. What must never happen is a *pass* — see `gate.py`, where a missing
     tool is `unavailable`, never `clean`.
+
+    `program` may arrive path-qualified: `test_runner_cmd` is project-configured, and
+    `["/opt/rust/bin/cargo", "test"]` is a legitimate way to write it. Everything that
+    keys off the program's *identity* — the rustup proxy binds and `RUSTUP_HOME` — must
+    therefore match on the basename, or a host that spells cargo with a path silently
+    loses its toolchain bind and the Rust HARD gate fails at the strongest link.
     """
+    name = Path(program).name
     for directory in _candidate_dirs(Path(workspace).resolve()):
         candidate = directory / program
         if candidate.is_file() and os.access(candidate, os.X_OK):
@@ -124,7 +157,8 @@ def resolve_tool(program: str, workspace: Path | str) -> ToolchainBinding | None
                 executable=resolved,
                 bind_root=_bind_root_for(resolved),
                 bin_dir=resolved.parent,
-                extra_bind_roots=_extra_roots_for(program),
+                extra_bind_roots=_extra_roots_for(name),
+                extra_env=_extra_env_for(name),
             )
 
     found = shutil.which(program)
@@ -137,7 +171,8 @@ def resolve_tool(program: str, workspace: Path | str) -> ToolchainBinding | None
         executable=resolved,
         bind_root=_bind_root_for(resolved),
         bin_dir=resolved.parent,
-        extra_bind_roots=_extra_roots_for(program),
+        extra_bind_roots=_extra_roots_for(name),
+        extra_env=_extra_env_for(name),
     )
 
 
@@ -147,7 +182,9 @@ def container_env_for(
     """`base_env` with every binding's `bin` directory prepended to `PATH`.
 
     Order is preserved and duplicates dropped, so a repo-local tool stays ahead of a
-    global one after de-duplication.
+    global one after de-duplication. Each binding's :attr:`~ToolchainBinding.extra_env`
+    is merged in as well; first binding to name a variable wins, matching the
+    most-specific-first ordering `PATH` already gets.
     """
     env = dict(base_env)
     seen: set[str] = set()
@@ -157,6 +194,8 @@ def container_env_for(
         if entry not in seen:
             seen.add(entry)
             prefix.append(entry)
+        for key, value in binding.extra_env:
+            env.setdefault(key, value)
 
     existing = env.get("PATH", "")
     env["PATH"] = os.pathsep.join([*prefix, existing]) if existing else os.pathsep.join(prefix)

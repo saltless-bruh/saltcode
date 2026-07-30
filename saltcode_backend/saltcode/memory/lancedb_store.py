@@ -56,6 +56,18 @@ Deletes previously interpolated the raw goal text into a LanceDB SQL predicate w
 hand-rolled quote doubling; `spec_cache` had always keyed on a digest for exactly this
 reason, and the two tiers now agree."""
 
+SPEC_CACHE_COMPATIBLE_VERSIONS = frozenset({"1", "2"})
+"""Store schema versions whose ``spec_cache`` layout is identical to the current one.
+
+The version is one number for the whole store, but the tiers do not fail together. The
+2 bump touched `semantic_cache` alone, so refusing to open a v1 store for an exact
+lookup would take down the tier design §11.2 calls "zero API" — the tier whose entire
+value is being available when the embedding side is not. So a caller that asked for no
+vector tables is checked against this set instead of against equality; a future bump
+that does change `spec_cache` simply does not get added here, and the guard bites
+again. Every version is still rejected for a vector caller, which is the strict reading.
+"""
+
 SPEC_CACHE_TABLE = "spec_cache"
 SEMANTIC_CACHE_TABLE = "semantic_cache"
 NOTES_TABLE = "notes"
@@ -288,11 +300,17 @@ def init_db(
             does not, and must not: design §11.2 tier 1 is "zero API", so a lookup
             there has to keep working when the embedding endpoint is down — that is
             precisely the situation in which a cached plan is most valuable. Callers
-            that embed anything leave this at ``True``.
+            that embed anything leave this at ``True``. The store-schema check is
+            relaxed to match (see :data:`SPEC_CACHE_COMPATIBLE_VERSIONS`): an
+            endpoint-independent tier that still refused to open on a version bump it
+            was not affected by would only have moved the outage.
 
     Raises:
         EmbeddingDimensionUnavailableError: A vector table must be created but the
             embedding dimension cannot be established.
+        StoreSchemaVersionMismatchError: The store on disk was built by a layout this
+            build cannot read — any different version for a vector caller, or one
+            outside :data:`SPEC_CACHE_COMPATIBLE_VERSIONS` when ``vectors`` is false.
     """
     db_path = get_db_path(workspace_path)
     db_path.mkdir(parents=True, exist_ok=True)
@@ -301,7 +319,10 @@ def init_db(
     meta = read_store_meta(workspace_path)
     if meta is not None:
         found = str(meta.get("schema_version", "1"))
-        if found != STORE_SCHEMA_VERSION:
+        readable = found == STORE_SCHEMA_VERSION or (
+            not vectors and found in SPEC_CACHE_COMPATIBLE_VERSIONS
+        )
+        if not readable:
             raise StoreSchemaVersionMismatchError(
                 f"This cache was built with store schema {found!r} but this build uses "
                 f"{STORE_SCHEMA_VERSION!r}. The cache is safe to regenerate — delete "

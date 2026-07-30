@@ -223,6 +223,60 @@ def test_nothing_is_stripped_from_a_document_of_live_sections() -> None:
     assert removed == []
 
 
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "## Unresolved Issues",
+        "## Undone Items",
+        "## Uncompleted Work",
+        "## Abandoned Approaches",
+        "## Redone Migration",
+        "## Incomplete Rollout",
+    ],
+)
+def test_a_negated_marker_is_not_an_obsolete_section(heading: str) -> None:
+    """Substring matching strips the sections that most need to survive.
+
+    "Unresolved" contains "resolved", "Undone" contains "done", "Uncompleted" contains
+    "completed" — every one of these read as obsolete and was deleted along with its
+    subsections. In a living design document, unresolved issues are the last thing a
+    compactor should throw away.
+    """
+    text = f"{heading}\nthis must survive\n\n## Overview\nlive\n"
+    kept, removed = strip_obsolete_sections(text)
+    assert kept == text
+    assert removed == []
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "## Completed Work",
+        "## Resolved Discussions",
+        "## Obsolete Notes",
+        "## Done",
+        "## Superseded Design",
+        "## Historical Context",
+        "## Changelog",
+    ],
+)
+def test_a_genuine_marker_is_still_stripped(heading: str) -> None:
+    """The negation fix must not have blunted the markers it was protecting."""
+    text = f"{heading}\nold\n\n## Overview\nlive\n"
+    kept, removed = strip_obsolete_sections(text)
+    assert "old" not in kept
+    assert "live" in kept
+    assert removed == [heading.lstrip("#").strip()]
+
+
+def test_unresolved_issues_survive_a_full_compaction() -> None:
+    """The end-to-end version of the same property, through `compact_spec`."""
+    document = DESIGN.replace("## Open Questions", "## Unresolved Issues")
+    result = compact_spec(document)
+    assert "What about rate limiting?" in result.content
+    assert "Unresolved Issues" in result.content
+
+
 # --------------------------------------------------------------- entrypoint
 
 
@@ -310,3 +364,63 @@ def test_entrypoint_rejects_a_missing_design(tmp_path: Path) -> None:
     code, payload = run_tool("--design", str(tmp_path / "nope.md"), "--sprint", "5")
     assert code == EXIT_USAGE
     assert payload["ok"] is False
+
+
+def test_omitting_the_sprint_forces_compaction(tmp_path: Path) -> None:
+    """`--sprint` is optional and documented as "omit to force" — prove it forces.
+
+    Without this the cadence check is the only path anyone exercises, and the manual
+    `/compact` route the extension needs (design §11.7) would be untested.
+    """
+    design = write_design(tmp_path)
+    before = constraints_text(design.read_text(encoding="utf-8"))
+
+    code, payload = run_tool("--design", str(design))
+
+    assert code == EXIT_OK
+    assert payload["verdict"] == "compacted"
+    assert payload["written"] is True
+    assert "Completed Work" in payload["sections_removed"]
+    assert constraints_text(design.read_text(encoding="utf-8")) == before
+
+
+def test_a_no_op_compaction_reports_no_change_and_writes_nothing(tmp_path: Path) -> None:
+    """`verdict` and `written` must agree.
+
+    Deriving the verdict from `bytes_saved` let a rewrite that changed content without
+    changing length report "no_change" next to `written: true` — a self-contradictory
+    payload for whatever automation reads this JSON.
+    """
+    design = write_design(tmp_path, "# Design\n\n## Overview\nlive\n\n## HARD CONSTRAINTS\n- Never log PII\n")
+    original = design.read_bytes()
+
+    code, payload = run_tool("--design", str(design))
+
+    assert code == EXIT_OK
+    assert payload["verdict"] == "no_change"
+    assert payload["written"] is False
+    assert design.read_bytes() == original
+
+
+def test_the_write_leaves_no_temp_file_behind(tmp_path: Path) -> None:
+    """The atomic write renames a sibling temp file over the target."""
+    design = write_design(tmp_path)
+
+    code, _ = run_tool("--design", str(design), "--sprint", "5")
+
+    assert code == EXIT_OK
+    assert [p.name for p in tmp_path.iterdir()] == ["design.md"]
+
+
+def test_help_exits_zero(tmp_path: Path) -> None:
+    """`--help` is not a usage error; argparse exits 0 and the caller must pass it on."""
+    completed = subprocess.run(
+        [sys.executable, "-m", "saltcode.tools.compact_spec", "--help"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        timeout=300,
+        check=False,
+    )
+    assert completed.returncode == EXIT_OK
+    assert "--design" in completed.stdout

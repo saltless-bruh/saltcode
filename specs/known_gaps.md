@@ -301,6 +301,43 @@ a container.
 Auditor is told to trust most (REQ-STAT-002 AC2), so it is the worst one to have
 unexercised. Same fixture work as G-009 and G-017.
 
+**Extended, 2026-07-30 (PR #2 review round 3).** Two more holes in the same fix, both
+now closed in code and both still unexercised end to end for the same reason. (1) The
+proxy match ran against the raw `program` string, so a path-qualified `test_runner_cmd`
+argv[0] — `/opt/rust/bin/cargo` — missed `RUST_PROXY_PROGRAMS` and silently lost the
+toolchain bind; identity now matches on `Path(program).name`. (2) `RUSTUP_HOME` was
+never passed into the container. The bind makes the toolchain reachable, not findable:
+`CONTAINER_ENV` replaces the environment wholesale and container `HOME` is
+`/tmp/saltcode-home`, so the proxy's `$HOME/.rustup` fallback resolves to nothing inside
+the container **even when the host uses rustup's default location**. It is now forwarded
+via `ToolchainBinding.extra_env` whenever a rustup home was resolved. That this fix
+needed two follow-up rounds is itself the argument for the real-toolchain fixture: every
+round found a defect that a single contained `cargo check` would have surfaced at once.
+
+### - [ ] G-019 — Obsolete-section detection is a word match, not a reading
+**Severity:** LOW · **Noticed:** Task 12 (PR #2 review round 3) · **Closed by:** Task 13.9 ·
+**Where:** `saltcode_backend/saltcode/contracts/spec_compactor.py`
+(`OBSOLETE_HEADING_MARKERS`, `_is_obsolete_heading`)
+
+The deterministic strip decides a section is obsolete by looking for one of seven marker
+words in its heading. Round 3 found that a plain substring test deleted `## Unresolved
+Issues`, `## Undone Items` and `## Uncompleted Work` — the markers are substrings of
+their own negations — and matching is now whole-word. That closes the class of failure
+that was actually occurring, but not the class of failure that exists: a negation spelled
+as a separate word still matches. `## Not Done Yet`, `## Never Superseded`, `## Changelog
+Policy (do not remove)` all contain a marker as a whole word and would be stripped with
+their subsections.
+
+*Why it matters:* less than it looks, because of how this code is reached. REQ-CMP-001
+AC2 puts the real compaction on Flash and passes it through `--proposed`, where the
+structural strip does not run at all; the deterministic path is the offline fallback. And
+the invariant this module exists to hold — the `## HARD CONSTRAINTS` block, byte-identical
+— is independent of it, spliced and re-verified either way. So the exposure is losing a
+*non-constraint* section in an offline compaction, recoverable from git. Not worth a
+sentence classifier; the honest fix is for the extension to show the removal list at
+Decision 4 before the write lands (Task 13.9's cumulative review), so a wrong strip is
+seen rather than merely reversible.
+
 ### - [ ] G-008 — `skills/` is an empty placeholder
 **Severity:** MED · **Noticed:** Task 0.2 · **Closed by:** Task 7.1c ·
 **Where:** `skills/`

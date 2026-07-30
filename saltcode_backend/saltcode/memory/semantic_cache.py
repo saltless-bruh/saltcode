@@ -56,12 +56,11 @@ def get_semantic_query(goal: str, scope: list[str]) -> str:
 def semantic_row_key(goal: str, scope: list[str]) -> str:
     """The row's identity: a sha256 of the same text that gets embedded.
 
-    Deletes filter on this rather than on the goal and scope columns. A LanceDB
-    delete takes a SQL predicate string, and goal text is free-form: the previous
-    version interpolated it with hand-rolled `\'` doubling, which is a quoting
-    scheme rather than a guarantee. A hex digest has no character that can end a
-    string literal, which is exactly the reasoning `spec_cache` already applied to
-    its own key — the two tiers now agree.
+    Replacement keys on this rather than on the goal and scope columns. The previous
+    version deleted by SQL predicate and goal text is free-form, so it interpolated the
+    goal with hand-rolled `\'` doubling — a quoting scheme rather than a guarantee. A
+    hex digest has no character that can end a string literal, which is exactly the
+    reasoning `spec_cache` already applied to its own key; the two tiers now agree.
     """
     return hashlib.sha256(get_semantic_query(goal, scope).encode("utf-8")).hexdigest()
 
@@ -115,20 +114,29 @@ def store_semantic_spec(
     key = semantic_row_key(goal, scope)
 
     # Replace rather than accumulate: re-planning the same goal over the same scope
-    # must not stack duplicate rows, which would also skew the PCD denominator. The
-    # predicate carries only a hex digest, never the goal text.
-    table.delete(f"key = '{key}'")
-
-    table.add(
-        [
-            {
-                "key": key,
-                "vector": vector,
-                "goal": goal,
-                "scope_fingerprint": scope_fingerprint,
-                "tasks_json": tasks_file.model_dump_json(),
-            }
-        ]
+    # must not stack duplicate rows, which would also skew the PCD denominator.
+    #
+    # Upsert rather than delete-then-add. Both express "replace", but delete+add has a
+    # window in which the row simply does not exist, and the entrypoints are separate
+    # processes (`pi.exec`): a concurrent `cache_lookup` landing inside that window
+    # reads a miss and fires a full Phase 1 for a goal that is in fact cached. Worse,
+    # a crash between the two statements leaves the row deleted for good. `merge_insert`
+    # keyed on the digest does it in one commit.
+    (
+        table.merge_insert("key")
+        .when_matched_update_all()
+        .when_not_matched_insert_all()
+        .execute(
+            [
+                {
+                    "key": key,
+                    "vector": vector,
+                    "goal": goal,
+                    "scope_fingerprint": scope_fingerprint,
+                    "tasks_json": tasks_file.model_dump_json(),
+                }
+            ]
+        )
     )
 
 

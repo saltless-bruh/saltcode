@@ -19,9 +19,12 @@ from saltcode.memory.lancedb_store import (
     NOTES_TABLE,
     SEMANTIC_CACHE_TABLE,
     SKILLS_TABLE,
+    SPEC_CACHE_COMPATIBLE_VERSIONS,
     SPEC_CACHE_TABLE,
+    STORE_SCHEMA_VERSION,
     EmbeddingDimensionMismatchError,
     EmbeddingDimensionUnavailableError,
+    StoreSchemaVersionMismatchError,
     check_vector_dimension,
     init_db,
     probe_vector_dimension,
@@ -684,3 +687,80 @@ def test_the_expected_major_survives_a_field_without_a_default() -> None:
     assert expected_major_version(NoDefault) == "1"
     assert major_of("2.7") == "2"
     assert major_of(None) == "1"
+
+
+# ============================================================================
+# Review follow-ups (CodeRabbit round 3, 2026-07-30)
+# ============================================================================
+
+
+def stamp_store_version(workspace: Path, version: str) -> None:
+    """Rewrite the sidecar's `schema_version`, simulating a store built by another build."""
+    meta_path = workspace / ".saltcode" / "cache" / "lancedb" / "_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["schema_version"] = version
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+
+def test_an_older_layout_still_opens_for_the_zero_api_exact_tier(
+    tmp_path: Path, embedding: AxisEmbedding
+) -> None:
+    """The store version is one number, but the tiers do not fail together.
+
+    The 2 bump added a `key` column to `semantic_cache` and touched nothing else, so
+    refusing to open a v1 store for an exact lookup takes down the tier design §11.2
+    calls "zero API" — the tier whose entire value is being available when the
+    embedding side is not.
+    """
+    init_db(tmp_path, embedding)  # a full store, so the sidecar exists to be aged
+    store_spec(tmp_path, "add auth", one_task_file())
+    stamp_store_version(tmp_path, "1")
+
+    result = lookup_spec_result(tmp_path, "add auth", scope=["src/auth.py"])
+    assert result.hit, result.detail
+
+    # The vector tiers are still refused: their layout is the one that changed.
+    with pytest.raises(StoreSchemaVersionMismatchError):
+        init_db(tmp_path, embedding)
+
+
+def test_an_unknown_future_layout_is_refused_by_both_tiers(
+    tmp_path: Path, embedding: AxisEmbedding
+) -> None:
+    """The relaxation is a named compatibility set, not "skip the check when offline"."""
+    init_db(tmp_path, embedding)
+    store_spec(tmp_path, "add auth", one_task_file())
+    stamp_store_version(tmp_path, "99")
+
+    with pytest.raises(StoreSchemaVersionMismatchError):
+        init_db(tmp_path, vectors=False)
+
+
+def test_the_current_version_is_in_the_compatible_set() -> None:
+    """A bump that forgets to update the set would silently refuse its own store."""
+    assert STORE_SCHEMA_VERSION in SPEC_CACHE_COMPATIBLE_VERSIONS
+
+
+def test_restoring_a_spec_never_leaves_the_row_missing(
+    tmp_path: Path, embedding: AxisEmbedding
+) -> None:
+    """Replacement is one commit, not delete-then-add.
+
+    The entrypoints are separate processes (`pi.exec`), so a concurrent `cache_lookup`
+    landing between a delete and its add reads a miss and fires a full Phase 1 for a
+    goal that is in fact cached — and a crash in that window loses the row for good.
+    """
+    tasks = one_task_file()
+    store_semantic_spec(tmp_path, "add auth", ["src/auth.py"], tasks, embedding)
+
+    db: Any = init_db(tmp_path, embedding)
+    table: Any = db.open_table(SEMANTIC_CACHE_TABLE)
+    versions_before = int(table.count_rows())
+
+    replacement = one_task_file("T2")
+    store_semantic_spec(tmp_path, "add auth", ["src/auth.py"], replacement, embedding)
+
+    result = lookup_semantic_result(tmp_path, "add auth", ["src/auth.py"], embedding)
+    assert result.cache_size == versions_before == 1
+    assert result.tasks is not None
+    assert [t.id for t in result.tasks.tasks] == ["T2"], "the upsert must update in place"

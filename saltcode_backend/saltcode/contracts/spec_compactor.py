@@ -126,11 +126,23 @@ def locate_constraints_block(content: str) -> ConstraintsBlock:
     return ConstraintsBlock(start=start, end=end, text=content[start:end])
 
 
+OBSOLETE_MARKER_PATTERN = re.compile(
+    r"\b(?:" + "|".join(re.escape(m) for m in OBSOLETE_HEADING_MARKERS) + r")\b"
+)
+"""Whole-word matching, because several markers are substrings of their own negations.
+
+A plain `marker in heading` test strips exactly the sections that must survive:
+`## Unresolved Issues` contains "resolved", `## Undone Items` contains "done", and
+`## Uncompleted Work` contains "completed" — all three read as obsolete and were
+removed along with their subsections. In a living design document "Unresolved
+Issues" is the last thing a compactor should delete."""
+
+
 def _is_obsolete_heading(line: str) -> bool:
     stripped = line.strip().lstrip("#").strip().lower()
     if not stripped:
         return False
-    return any(marker in stripped for marker in OBSOLETE_HEADING_MARKERS)
+    return OBSOLETE_MARKER_PATTERN.search(stripped) is not None
 
 
 def _heading_level(line: str) -> int:

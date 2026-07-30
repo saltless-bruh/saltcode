@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from saltcode.harness.sandbox import (
+    CONTAINER_ENV,
     ContainedResult,
     apply_diff,
     detect_containment_backend,
@@ -684,6 +685,98 @@ def test_a_host_without_rustup_adds_no_phantom_bind(
     binding = resolve_tool("cargo", tmp_path)
     assert binding is not None
     assert binding.extra_bind_roots == ()
+    assert binding.extra_env == ()
+
+
+def test_a_path_qualified_cargo_still_binds_the_rustup_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`test_runner_cmd` is project-configured, so argv[0] may carry a path.
+
+    Matching the rustup proxy list on the raw string means `/opt/rust/bin/cargo`
+    misses it, the toolchain is never bound, and Rust — a HARD gate — fails inside
+    the container for a reason that looks nothing like its cause.
+    """
+    cargo_bin = tmp_path / "opt" / "rust" / "bin"
+    cargo_bin.mkdir(parents=True)
+    cargo = cargo_bin / "cargo"
+    cargo.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    cargo.chmod(0o755)
+
+    rustup = tmp_path / "rustup"
+    (rustup / "toolchains").mkdir(parents=True)
+    monkeypatch.setenv("RUSTUP_HOME", str(rustup))
+
+    binding = resolve_tool(str(cargo), tmp_path)
+    assert binding is not None
+    assert rustup in ro_binds_for([binding])
+
+
+def test_rustup_home_is_forwarded_into_the_container(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Binding the toolchain is only half of it — the proxy has to be told where it is.
+
+    `CONTAINER_ENV` replaces the environment wholesale and container `HOME` is
+    `/tmp/saltcode-home`, so the proxy's `$HOME/.rustup` fallback resolves to nothing
+    even on a host that uses rustup's default location.
+    """
+    cargo_bin = tmp_path / "cargo" / "bin"
+    cargo_bin.mkdir(parents=True)
+    cargo = cargo_bin / "cargo"
+    cargo.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    cargo.chmod(0o755)
+
+    rustup = tmp_path / "rustup"
+    (rustup / "toolchains").mkdir(parents=True)
+    monkeypatch.setenv("RUSTUP_HOME", str(rustup))
+    monkeypatch.setenv("PATH", str(cargo_bin))
+
+    binding = resolve_tool("cargo", tmp_path)
+    assert binding is not None
+
+    env = container_env_for([binding], dict(CONTAINER_ENV))
+    assert env["RUSTUP_HOME"] == str(rustup)
+    assert env["HOME"] == CONTAINER_ENV["HOME"], "the container home must be untouched"
+
+
+def test_rustup_home_defaults_are_forwarded_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host on the *default* `~/.rustup` needs the variable most of all.
+
+    Its `~` inside the container is `/tmp/saltcode-home`, so leaving `RUSTUP_HOME`
+    unset is exactly the case where the proxy looks in the wrong place.
+    """
+    home = tmp_path / "home"
+    (home / ".rustup" / "toolchains").mkdir(parents=True)
+    cargo_bin = home / ".cargo" / "bin"
+    cargo_bin.mkdir(parents=True)
+    cargo = cargo_bin / "cargo"
+    cargo.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    cargo.chmod(0o755)
+
+    monkeypatch.delenv("RUSTUP_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", str(cargo_bin))
+
+    binding = resolve_tool("cargo", tmp_path)
+    assert binding is not None
+
+    env = container_env_for([binding], dict(CONTAINER_ENV))
+    assert env["RUSTUP_HOME"] == str(home / ".rustup")
+
+
+def test_a_non_rust_tool_forwards_no_extra_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rustup = tmp_path / "rustup"
+    (rustup / "toolchains").mkdir(parents=True)
+    monkeypatch.setenv("RUSTUP_HOME", str(rustup))
+
+    binding = resolve_tool("ruff", tmp_path)
+    assert binding is not None
+    assert "RUSTUP_HOME" not in container_env_for([binding], dict(CONTAINER_ENV))
 
 
 # --- config-load failures must not become silent defaults -------------------
