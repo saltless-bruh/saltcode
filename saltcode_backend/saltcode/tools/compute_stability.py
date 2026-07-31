@@ -47,8 +47,8 @@ from saltcode.tools._cli import (
     EXIT_USAGE,
     EXIT_VERDICT_NEGATIVE,
     emit,
-    exit_code_for,
     fail,
+    parse_cli,
     read_payload,
 )
 
@@ -96,10 +96,11 @@ def _read_optional(path: str | None) -> str:
 
 def run(argv: Sequence[str] | None = None, client: JudgmentClient | None = None) -> int:
     parser = build_parser()
-    try:
-        args = parser.parse_args(argv)
-    except SystemExit as exc:
-        return exit_code_for(exc)
+    args, code = parse_cli(parser, argv, TOOL)
+    if args is None:
+        # `--help` (code 0) or a usage error whose JSON envelope parse_cli
+        # already emitted. Either way there is nothing further to run.
+        return code
 
     if args.passes < 1:
         return fail(TOOL, "InputError", f"--passes must be at least 1, got {args.passes}", code=EXIT_USAGE)

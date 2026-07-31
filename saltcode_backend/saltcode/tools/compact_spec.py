@@ -43,8 +43,8 @@ from saltcode.tools._cli import (
     EXIT_USAGE,
     EXIT_VERDICT_NEGATIVE,
     emit,
-    exit_code_for,
     fail,
+    parse_cli,
 )
 
 if TYPE_CHECKING:
@@ -80,11 +80,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    try:
-        args = parser.parse_args(argv)
-    except SystemExit as exc:
-        # `--help` exits 0; only a real parse error is a usage error.
-        return exit_code_for(exc)
+    args, code = parse_cli(parser, argv, TOOL)
+    if args is None:
+        # `--help` (code 0) or a usage error whose JSON envelope parse_cli
+        # already emitted. Either way there is nothing further to run.
+        return code
 
     design_path = Path(args.design)
     if not design_path.is_file():

@@ -65,18 +65,6 @@ combination, and limit flags are all unverified in practice.
 *Why it matters:* Docker is the fallback when `bwrap` is unavailable — exactly
 the situation where nobody wants to discover the fallback is broken.
 
-### - [ ] G-006 — The entrypoint exit-code scheme is a convention, not a contract
-**Severity:** LOW · **Noticed:** Task 1.7 · **Closed by:** Task 7b.2 ·
-**Where:** `saltcode_backend/saltcode/tools/_cli.py`
-
-`0` positive · `1` negative verdict · `2` usage · `3` internal is not fixed by
-any requirement. It is documented in `_cli.py` and followed by all four
-entrypoints so far.
-
-*Why it matters:* the extension's tool wrappers will branch on these codes
-(REQ-EXT-004), so 7b.2 must publish the scheme as a contract before Task 13.2
-depends on it.
-
 ### - [ ] G-007 — `design.md` §17's project tree is missing backend modules
 **Severity:** LOW · **Noticed:** Tasks 2 and 3 · **Closed by:** Task 15.3 ·
 **Where:** `specs/design.md` §17
@@ -411,6 +399,27 @@ no skills behind it.
 ---
 
 ## Closed
+
+### - [x] G-006 — The entrypoint exit-code scheme is a convention, not a contract
+**Severity:** LOW · **Noticed:** Task 1.7 · **Closed by:** Task 7b.2 ·
+**Closed:** 2026-07-31 ·
+**Where:** `saltcode_backend/saltcode/tools/_cli.py`, `docs/entrypoints.md`
+
+The 0/1/2/3 scheme was documented in one module docstring and re-implemented by each
+entrypoint. Nothing checked that the thirteen agreed, and no spec fixed the numbers.
+
+**Closed by** `docs/entrypoints.md` (the contract, including what is deliberately *not*
+promised) plus `tests/test_task_7b_entrypoints.py`, which parametrises every invariant
+over the roster and cross-checks that roster against `saltcode/tools/*.py` in both
+directions — so a fourteenth entrypoint is held to the contract automatically.
+
+**It found a real defect on its first run**, which is the best evidence the gap was worth
+recording. 35 of 112 failed against shipped code: every entrypoint returned exit **2** on
+an unknown flag with **empty stdout**, because `argparse` writes its usage message to
+stderr and `exit_code_for` translated the code without emitting a payload. The extension's
+`JSON.parse("")` throws on that, so a mistyped flag surfaced as an unhandled error rather
+than a tool result. Each task's own tests had asserted the exit code and not the payload —
+precisely the half-checked contract this gap described. Fixed once in `_cli.parse_cli`.
 
 ### - [x] G-005 — The Auditor cannot vary temperature across stability passes
 **Severity:** MED · **Noticed:** Task 2.1 · **Closed by:** Task 10.1 ·

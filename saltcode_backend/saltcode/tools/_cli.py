@@ -26,9 +26,15 @@ documented here as the contract Task 7b.2 consolidates.
 
 from __future__ import annotations
 
+import argparse
+import contextlib
+import io
 import json
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 EXIT_OK = 0
 """Ran successfully; verdict is positive."""
@@ -76,6 +82,47 @@ def read_payload(source: str) -> str:
     from pathlib import Path
 
     return Path(source).read_text(encoding="utf-8")
+
+
+def parse_cli(
+    parser: argparse.ArgumentParser,
+    argv: Sequence[str] | None,
+    tool: str,
+) -> tuple[argparse.Namespace | None, int]:
+    """Parse arguments, emitting the JSON envelope on a usage error.
+
+    Returns ``(args, EXIT_OK)`` on success, or ``(None, code)`` when the caller should
+    return ``code`` immediately.
+
+    **Why this exists.** `argparse` writes its usage message to *stderr* and raises
+    `SystemExit(2)`; catching that and returning :data:`EXIT_USAGE` gets the exit code
+    right and leaves **stdout empty**. Every entrypoint did exactly that, so a mistyped
+    flag produced exit 2 with nothing to parse — and the extension's `JSON.parse` throws
+    on an empty string, turning a typo into an unhandled error rather than a tool result.
+    The exit-code half of the contract was tested per tool; the payload half was not,
+    which is what G-006 warned about and what `tests/test_task_7b_entrypoints.py` caught.
+
+    ``--help`` is the one documented exception: `argparse` raises ``SystemExit(0)`` after
+    printing help text to stdout, and appending a JSON object to that would produce
+    output that is neither help nor parseable. It returns :data:`EXIT_OK` with no payload.
+
+    The usage message is preserved on stderr *and* carried in the payload's ``detail``,
+    so a human running the CLI still sees it and a machine can read it.
+    """
+    buffer = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(buffer):
+            args = parser.parse_args(argv)
+    except SystemExit as exc:
+        message = buffer.getvalue()
+        sys.stderr.write(message)
+        code = exit_code_for(exc)
+        if code == EXIT_OK:
+            return None, EXIT_OK
+        return None, fail(tool, "UsageError", message.strip() or "invalid arguments", code=code)
+    else:
+        sys.stderr.write(buffer.getvalue())
+        return args, EXIT_OK
 
 
 def exit_code_for(exc: SystemExit) -> int:
