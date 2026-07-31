@@ -24,6 +24,7 @@ from saltcode.stability.measure import (
     AuditEvidence,
     JudgmentClient,
     StabilityMeasurement,
+    escalation_for,
     measure_stability,
 )
 
@@ -82,7 +83,11 @@ def resolve_reason(measurement: StabilityMeasurement, report: HeuristicReport) -
     verdict = measurement.majority_verdict
 
     if not report.fired:
-        return verdict, measurement.passes[0].detail if measurement.passes else ""
+        # The detail must come from a pass that actually returned the majority verdict.
+        # Taking `passes[0]` unconditionally pairs, for `[impl_fail, pass, pass]`, a
+        # `reason` of "pass" with the impl_fail pass's sentence — an `audit_result` whose
+        # own detail contradicts its verdict.
+        return verdict, next((p.detail for p in measurement.passes if p.verdict == verdict), "")
 
     if verdict == "pass":
         return "pass", f"judgment cleared {report.summary()}"
@@ -195,8 +200,6 @@ def audit_payload(
     online: bool,
 ) -> dict[str, Any]:
     """The entrypoint's JSON: the contract plus the evidence for it."""
-    from saltcode.stability.measure import escalation_for
-
     return {
         "audit_result": result.model_dump(),
         "heuristics": report.to_dict(),

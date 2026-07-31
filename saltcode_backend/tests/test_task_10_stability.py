@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from saltcode.contracts.audit_result import AuditResult
@@ -51,7 +52,7 @@ from saltcode.stability.measure import (
     parse_verdict,
     render_prompt,
 )
-from saltcode.tools._cli import EXIT_OK, EXIT_USAGE, EXIT_VERDICT_NEGATIVE
+from saltcode.tools._cli import EXIT_ERROR, EXIT_OK, EXIT_USAGE, EXIT_VERDICT_NEGATIVE
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -86,7 +87,13 @@ class ScriptedClient:
                 "contains_raw_source": contains_raw_source,
             }
         )
-        verdict = self.verdicts[len(self.calls) - 1] if len(self.calls) <= len(self.verdicts) else "pass"
+        if len(self.calls) > len(self.verdicts):
+            # Never fall back to "pass": a test that runs more passes than it scripted
+            # would then measure three agreeing verdicts and succeed for the wrong reason.
+            raise AssertionError(
+                f"ScriptedClient ran out after {len(self.verdicts)} scripted verdicts"
+            )
+        verdict = self.verdicts[len(self.calls) - 1]
         return json.dumps({"verdict": verdict, "detail": f"pass {len(self.calls)}"})
 
 
@@ -204,8 +211,28 @@ def test_the_diff_body_is_never_permuted() -> None:
 
 def test_the_temperature_ladder_is_clamped() -> None:
     """Past ~1.0 the output is noise, which would report instability that means nothing."""
-    conditions = build_conditions(40)
+    conditions = build_conditions(6)
     assert max(c.temperature for c in conditions) <= MAX_TEMPERATURE
+
+
+def test_more_passes_than_distinct_conditions_is_refused() -> None:
+    """The ladder saturates and the rotation cycles, so past some N two passes share a
+    condition — and passes that share one agree trivially. Continuing would produce a
+    `stability_score` from non-independent passes, which is exactly the decorative number
+    this design exists to eliminate, so it is refused rather than reported as a flag.
+    """
+    largest = max(n for n in range(1, 60) if _conditions_are_distinct(n))
+    assert build_conditions(largest), "the ceiling itself must still build"
+    with pytest.raises(ValueError, match="distinct stability conditions"):
+        build_conditions(largest + 1)
+
+
+def _conditions_are_distinct(n: int) -> bool:
+    try:
+        conditions = build_conditions(n)
+    except ValueError:
+        return False
+    return len({c.describe() for c in conditions}) == n
 
 
 def test_the_measurement_reports_whether_the_conditions_were_distinct() -> None:
@@ -284,8 +311,6 @@ def test_verdicts_are_read_not_guessed(raw: str, expected: str) -> None:
 def test_an_unparseable_pass_lowers_stability_rather_than_agreeing() -> None:
     """Coercing it into a neighbour's verdict would manufacture the very agreement
     the measurement exists to detect the absence of."""
-    client = ScriptedClient(["pass", "pass", "pass"])
-    client.verdicts = ["pass", "pass", "pass"]
     measurement = measure_stability(evidence(), ScriptedClient(["pass", "pass", "pass"]))
     assert measurement.stability_score == 1.0
 
@@ -326,7 +351,6 @@ def test_an_empty_body_under_test_is_flagged() -> None:
     ["    pass", "    ...", "    raise NotImplementedError", "    return None"],
 )
 def test_stub_bodies_are_recognised_across_shapes(stub: str) -> None:
-    diff = f"--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n+def charge(amount):\n+{stub[4:]}\n"
     diff = f"--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n+def charge(amount):\n+{stub}\n"
     assert EMPTY_BODY in run_heuristics(diff, "").names
 
@@ -420,6 +444,17 @@ def test_an_unflagged_diff_keeps_the_judgment_verdict() -> None:
     assert result.reason == "impl_fail"
 
 
+def test_the_detail_comes_from_a_pass_that_returned_the_majority_verdict() -> None:
+    """Taking `passes[0]` unconditionally pairs a `pass` reason with the impl_fail
+    pass's sentence — an `audit_result` whose own detail contradicts its verdict."""
+    result, measurement, _ = audit_diff(
+        evidence(), ScriptedClient(["impl_fail", "pass", "pass"])
+    )
+    assert result.reason == "pass"
+    assert measurement.passes[0].verdict == "impl_fail"
+    assert result.detail == "pass 2", "the detail must come from a pass that said 'pass'"
+
+
 def test_spec_defect_routes_to_a_respec_not_a_retry() -> None:
     """REQ-AUD-003 AC1 / REQ-FAIL-001 AC3: it does not consume a Builder retry."""
     result, _, _ = audit_diff(evidence(), ScriptedClient(["spec_defect"] * 3))
@@ -490,7 +525,7 @@ def test_the_result_validates_as_the_typed_contract() -> None:
 # ------------------------------------------------------- G-005: the temperature knob
 
 
-def test_the_local_client_accepts_a_per_pass_temperature() -> None:
+def test_the_local_client_accepts_a_per_pass_temperature(monkeypatch: pytest.MonkeyPatch) -> None:
     """G-005: `chat` pinned temperature, so "distinct conditions" was unsatisfiable."""
     client = LocalClient()
     captured: dict[str, Any] = {}
@@ -513,14 +548,8 @@ def test_the_local_client_accepts_a_per_pass_temperature() -> None:
             captured.update(json)
             return FakeResponse()
 
-    import httpx
-
-    original = httpx.Client
-    httpx.Client = FakeClient  # type: ignore[assignment,misc]
-    try:
-        client.chat([{"role": "user", "content": "x"}], thinking=False, model="A_STD", temperature=0.4)
-    finally:
-        httpx.Client = original  # type: ignore[assignment,misc]
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    client.chat([{"role": "user", "content": "x"}], thinking=False, model="A_STD", temperature=0.4)
 
     assert captured["temperature"] == pytest.approx(0.4)
 
@@ -595,3 +624,31 @@ def test_the_entrypoint_emits_the_contract_in_process(tmp_path: Path) -> None:
         client=ScriptedClient(["impl_fail"] * 3),
     )
     assert code == EXIT_VERDICT_NEGATIVE
+
+    # An unreachable Saltnitor is exit 3, never a low-stability verdict at exit 1 —
+    # this is the branch that keeps an outage from reading as "the Auditor is unsure".
+    code = run_entry(
+        ["--repo", str(tmp_path), "--task-id", "T1", "--diff", str(diff)],
+        client=ExplodingClient(),
+    )
+    assert code == EXIT_ERROR
+
+
+def test_a_mis_encoded_evidence_file_returns_a_usage_code(tmp_path: Path) -> None:
+    """`UnicodeDecodeError` is a ValueError, so it would otherwise escape `run` entirely.
+
+    `main` absorbs it, but `run(argv, client=...)` is a documented in-process entrypoint
+    whose contract is to return an exit code.
+    """
+    from saltcode.tools.compute_stability import run as run_entry
+
+    diff = tmp_path / "d.patch"
+    diff.write_text("--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+b\n", encoding="utf-8")
+    binary = tmp_path / "static.bin"
+    binary.write_bytes(b"\xff\xfe\x00\x80 not utf-8")
+
+    code = run_entry(
+        ["--repo", str(tmp_path), "--task-id", "T1", "--diff", str(diff), "--static", str(binary)],
+        client=ScriptedClient(["pass"] * 3),
+    )
+    assert code == EXIT_USAGE

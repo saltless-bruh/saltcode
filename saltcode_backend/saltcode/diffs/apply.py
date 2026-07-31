@@ -40,14 +40,19 @@ GIT_APPLY_TIMEOUT_SECONDS = 60
 """Bounded like every other subprocess in the backend (REQ-STAT-003)."""
 
 FORBIDDEN_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"^tests/"),
-    re.compile(r"^\.saltcode/tests/"),
-    re.compile(r"(?:^|/)tests/"),
+    re.compile(r"(?:^|/)tests/", re.IGNORECASE),
 )
 """Paths no Builder diff may touch (REQ-BLD-003).
 
-The third pattern catches a nested suite (`src/pkg/tests/…`), which the first two miss
-and which is where a Python or Go project usually keeps its tests.
+One pattern covers all three shapes, since :func:`blocked_paths` matches with `search`:
+a top-level `tests/`, `.saltcode/tests/`, and a nested suite (`src/pkg/tests/…`, where
+Python and Go projects usually keep theirs).
+
+**Case-insensitive, and that is not cosmetic.** This module writes to the human's live
+tree, which on macOS (APFS) or Windows (NTFS) is case-insensitive: a diff naming
+`Tests/task_T1_spec.py` clears a case-sensitive check and then `git apply` writes the
+existing `tests/task_T1_spec.py`. REQ-BLD-003 would be defeated on exactly the machine
+this code exists to protect.
 """
 
 _DIFF_PATH_RE = re.compile(
@@ -101,6 +106,13 @@ class LiveApplyResult:
             "blocked_paths": self.blocked_paths,
             "committed": self.committed,
         }
+
+
+def _as_text(raw: str | bytes | None) -> str:
+    """`TimeoutExpired.stdout` is `str` under `text=True` but typed as `bytes | None`."""
+    if raw is None:
+        return ""
+    return raw if isinstance(raw, str) else raw.decode("utf-8", errors="replace")
 
 
 def diff_paths(diff_text: str) -> list[str]:
@@ -191,18 +203,35 @@ def apply_live(
     paths = diff_paths(diff_text)
 
     def run(args: list[str]) -> subprocess.CompletedProcess[str]:
-        completed = subprocess.run(
-            args,
-            cwd=repo_path,
-            input=diff_text,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
         # REQ-SEC-003: every executed command is recorded, including the ones that run
         # outside the container. A write to the live tree is the last thing that should
-        # be missing from the audit log.
+        # be missing from the audit log — and a command that *timed out* still ran, and
+        # may have written part of the patch before it was killed, so it is the entry a
+        # reader would most want. `exit_code=None` is the log's own "nothing exited"
+        # value, with the reason naming the timeout.
+        try:
+            completed = subprocess.run(
+                args,
+                cwd=repo_path,
+                input=diff_text,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            append_entry(
+                repo_path,
+                command=args,
+                cwd=str(repo_path),
+                container_id=None,
+                exit_code=None,
+                stdout=_as_text(exc.stdout),
+                stderr=_as_text(exc.stderr),
+                reason=f"timed out after {timeout}s",
+            )
+            raise
+
         append_entry(
             repo_path,
             command=args,

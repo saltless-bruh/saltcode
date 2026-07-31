@@ -181,9 +181,18 @@ def build_conditions(
     disagreement between passes is a property of the judgment rather than of the run.
 
     Raises:
-        ValueError: ``n_passes`` is below 1. N=1 is permitted — it yields a degenerate
+        ValueError: ``n_passes`` is below 1, or above the number of distinct conditions
+            this scheme can produce. N=1 is permitted — it yields a degenerate
             ``stability_score`` of 1.0 by the REQ-AUD-002 formula's own convention —
             but zero passes would make the score undefined rather than degenerate.
+
+            The upper bound is the point of the whole module. The temperature ladder
+            saturates at :data:`MAX_TEMPERATURE` and the evidence rotation cycles every
+            ``len(sections)``, so past some N two passes share a condition and AC5 stops
+            holding. Refusing is the only honest answer: continuing would produce a
+            `stability_score` from passes that were never independent, which is the
+            decorative number this design exists to eliminate. The ceiling is *measured*
+            below rather than hardcoded, so extending either axis raises it automatically.
     """
     if n_passes < 1:
         raise ValueError(f"n_passes must be at least 1, got {n_passes}")
@@ -198,6 +207,16 @@ def build_conditions(
                 temperature=min(i * TEMPERATURE_STEP, MAX_TEMPERATURE),
                 evidence_order=ordered[rotation:] + ordered[:rotation],
             )
+        )
+
+    distinct = len({c.describe() for c in conditions})
+    if distinct != n_passes:
+        raise ValueError(
+            f"cannot build {n_passes} distinct stability conditions; this scheme yields "
+            f"{distinct} before the temperature ladder saturates and the evidence rotation "
+            "repeats. REQ-AUD-002 AC5 requires a distinct condition per pass, and passes "
+            "sharing one would agree trivially — inflating stability_score rather than "
+            "measuring it."
         )
     return conditions
 

@@ -325,7 +325,8 @@ Decision 4 before the write lands (Task 13.9's cumulative review), so a wrong st
 seen rather than merely reversible.
 
 ### - [ ] G-020 — `gac` has no defined index base
-**Severity:** LOW · **Noticed:** Task 10.1 · **Closed by:** a requirements amendment ·
+**Severity:** LOW · **Noticed:** Task 10.1 · **Closed by:** a future requirements
+amendment (not yet written — this gap is OPEN) ·
 **Where:** `saltcode_backend/saltcode/stability/measure.py` (`compute_gac`),
 `saltcode/contracts/audit_result.py` (`StabilityInfo.gac`)
 
@@ -347,7 +348,8 @@ thing that survives for a year. The fix is one sentence in `specs/requirements.m
 REQ-CON-006, not a code change.
 
 ### - [ ] G-021 — A heuristic flag overrides a `spec_defect` judgment
-**Severity:** MED · **Noticed:** Task 10.2 · **Closed by:** a requirements amendment ·
+**Severity:** MED · **Noticed:** Task 10.2 · **Closed by:** a future requirements
+amendment (not yet written — this gap is OPEN) ·
 **Where:** `saltcode_backend/saltcode/stability/audit.py` (`resolve_reason`)
 
 REQ-AUD-001 AC1 reads: "WHEN a heuristic flag fires, THEN the verdict SHALL be
@@ -367,6 +369,31 @@ looks like it games the tests, and `spec_defect` says those tests should not be 
 which is the more fundamental claim. That is a change to REQ-AUD-001 AC1's wording, so it
 belongs in the proposal → requirements, not in the code. Until then the code follows the
 requirement as written and says so in the emitted `detail`.
+
+### - [ ] G-022 — The PCD density bars have no specified estimator
+**Severity:** LOW · **Noticed:** Task 14b.3 · **Closed by:** a future requirements
+amendment (not yet written — this gap is OPEN) ·
+**Where:** `saltcode_backend/saltcode/stability/calibrate.py`
+(`PCD_LOW_QUANTILE`, `PCD_HIGH_QUANTILE`)
+
+Design §11.9 lists the PCD bars among the things `saltcode_calibrate` measures and says
+nothing about how. REQ-CACHE-003 AC2/AC3 describe only the *consequences* of a PCD
+landing above the high bar or below the low one. So unlike the Auditor bar (max-F1,
+REQ-AUD-005) and the cosine bar (just above the highest non-match), the density bars have
+no rule to implement.
+
+Implemented as the **quartiles** of the PCD distribution observed over the calibration
+set — "dense" and "sparse" relative to what this project's own cache actually looks like,
+which is the smallest reading consistent with what PCD is for. Each query is held out of
+its own corpus, matching how runtime PCD sees a goal that is not yet cached.
+
+*Why it matters:* less than the other two bars, because REQ-CACHE-003 AC5 keeps the PCD
+bars **inert while uncalibrated** — full Architect confirmation regardless of where they
+sit — so a bad estimator cannot cause a false reuse before it has been measured. After
+calibration it can: a high bar set too low earns a *cheap* confirmation for a
+neighbourhood that is not really dense. Quartiles are also a poor fit for a small
+calibration set, where they are dominated by a handful of values. The fix is a sentence
+in REQ-CACHE-003 or design §11.9 naming the estimator, not a code change.
 
 ### - [ ] G-008 — `skills/` is an empty placeholder
 **Severity:** MED · **Noticed:** Task 0.2 · **Closed by:** Task 7.1c ·

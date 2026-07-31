@@ -26,6 +26,7 @@ from saltcode.memory.lancedb_store import (
     EmbeddingDimensionUnavailableError,
     StoreSchemaVersionMismatchError,
     check_vector_dimension,
+    get_meta_path,
     init_db,
     probe_vector_dimension,
     read_store_meta,
@@ -696,7 +697,7 @@ def test_the_expected_major_survives_a_field_without_a_default() -> None:
 
 def stamp_store_version(workspace: Path, version: str) -> None:
     """Rewrite the sidecar's `schema_version`, simulating a store built by another build."""
-    meta_path = workspace / ".saltcode" / "cache" / "lancedb" / "_meta.json"
+    meta_path = get_meta_path(workspace)
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta["schema_version"] = version
     meta_path.write_text(json.dumps(meta), encoding="utf-8")

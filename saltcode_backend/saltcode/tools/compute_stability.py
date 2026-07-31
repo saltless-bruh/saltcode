@@ -113,7 +113,11 @@ def run(argv: Sequence[str] | None = None, client: JudgmentClient | None = None)
         static_report = _read_optional(args.static)
         test_results = _read_optional(args.tests)
         spec_content = _read_optional(args.spec)
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
+        # `UnicodeDecodeError` is a ValueError, not an OSError, so a binary or
+        # mis-encoded evidence file would otherwise escape `run` entirely. `main`
+        # absorbs it, but `run(argv, client=...)` is a documented in-process entrypoint
+        # whose contract is to return an exit code.
         return fail(TOOL, "IOError", str(exc), code=EXIT_USAGE)
 
     diff_text = extract_diff_from_fences(raw_diff)

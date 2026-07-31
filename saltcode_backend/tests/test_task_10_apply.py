@@ -111,6 +111,18 @@ def test_the_saltcode_spec_directory_is_blocked_too() -> None:
     assert blocked_paths("--- a/.saltcode/tests/task_T1_spec.py\n+++ b/.saltcode/tests/task_T1_spec.py\n")
 
 
+def test_a_case_variant_of_tests_is_blocked() -> None:
+    """This module writes to the human's live tree, which on macOS (APFS) or Windows
+    (NTFS) is case-insensitive: a diff naming `Tests/task_T1_spec.py` clears a
+    case-sensitive check and `git apply` then writes the existing `tests/...`.
+    REQ-BLD-003 would be defeated on exactly the machine this code protects.
+    """
+    assert blocked_paths("--- a/Tests/task_T1_spec.py\n+++ b/Tests/task_T1_spec.py\n")
+    assert blocked_paths("--- a/src/TESTS/x.py\n+++ b/src/TESTS/x.py\n")
+    with pytest.raises(WriteScopeViolationError):
+        check_write_scope("--- a/Tests/task_T1_spec.py\n+++ b/Tests/task_T1_spec.py\n")
+
+
 def test_source_paths_are_not_blocked() -> None:
     assert blocked_paths(GOOD_DIFF) == []
     assert blocked_paths("--- a/src/latest/x.py\n+++ b/src/latest/x.py\n") == []
@@ -198,6 +210,34 @@ def test_a_diff_that_does_not_apply_is_a_failure_not_a_refusal(live_repo: Path) 
 def test_applying_outside_a_git_repo_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(LiveApplyError, match="not a git repository"):
         apply_live(tmp_path, GOOD_DIFF)
+
+
+def test_a_timed_out_apply_is_still_recorded(
+    live_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REQ-SEC-003: a command that timed out still ran, and may have written part of
+    the patch before it was killed — so it is the entry a reader most wants.
+
+    The timeout is injected rather than provoked: a real one would need `git apply` to
+    hang, which is neither reproducible nor fast.
+    """
+    from saltcode.diffs import apply as apply_module
+    from saltcode.harness.audit_log import read_entries
+
+    def always_times_out(*args: Any, **kwargs: Any) -> Any:
+        raise subprocess.TimeoutExpired(cmd=["git", "apply"], timeout=60)
+
+    monkeypatch.setattr(apply_module.subprocess, "run", always_times_out)
+
+    result = apply_live(live_repo, GOOD_DIFF)
+
+    assert result.status == "failed", "a timeout is a verdict, not an exception"
+    assert "timed out" in result.detail
+
+    entries = read_entries(live_repo)
+    assert entries, "the timeout must not leave the audit log empty"
+    assert entries[-1]["exit_code"] is None, "nothing exited, so there is no exit code"
+    assert "timed out" in str(entries[-1].get("reason", ""))
 
 
 def test_the_apply_is_recorded_in_the_audit_log(live_repo: Path) -> None:

@@ -710,6 +710,9 @@ def test_a_path_qualified_cargo_still_binds_the_rustup_home(
     binding = resolve_tool(str(cargo), tmp_path)
     assert binding is not None
     assert rustup in ro_binds_for([binding])
+    # Both the bind and the env key off the same normalised name; assert both, so a
+    # future edit that decouples the call sites cannot silently drop RUSTUP_HOME.
+    assert container_env_for([binding], dict(CONTAINER_ENV))["RUSTUP_HOME"] == str(rustup)
 
 
 def test_rustup_home_is_forwarded_into_the_container(

@@ -50,7 +50,11 @@ FIXTURE_RETURN = "fixture_literal_return"
 EMPTY_BODY = "empty_or_throw_only_body"
 TEST_KEYED_BRANCH = "test_input_keyed_branch"
 
-_STRING_LITERAL_RE = re.compile(r"""(['"])(?P<body>(?:\\.|(?!\1).)*)\1""")
+# The two branches must be disjoint: `\\.` and `(?!\1).` both match a backslash, so
+# an unterminated literal containing a run of escapes makes the engine explore every
+# partition of that run — measured at ~4x per 4 extra backslashes. The input is a
+# model-produced diff, so a pathological line is reachable, not hypothetical.
+_STRING_LITERAL_RE = re.compile(r"""(['"])(?P<body>(?:\\.|(?!\1)[^\\])*)\1""")
 _NUMBER_LITERAL_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)(?![\w.])")
 
 _RETURN_RE = re.compile(r"^\s*(?:return|Ok\(|=>)\s*(?P<value>.+?)\s*;?\s*$")
@@ -174,9 +178,12 @@ def _mentions_literal(text: str, literals: set[str]) -> str | None:
     """The first fixture literal appearing in ``text``, or ``None``.
 
     Longest first, so a report names the most specific match rather than an incidental
-    substring of it.
+    substring of it. The literal itself breaks ties, because `literals` is a set and
+    string hashing is randomised per process — without it, two equal-length fixtures
+    would put a different one in `detail` on each run, and the emitted JSON would stop
+    being reproducible.
     """
-    for literal in sorted(literals, key=len, reverse=True):
+    for literal in sorted(literals, key=lambda s: (-len(s), s)):
         if literal and literal in text:
             return literal
     return None
