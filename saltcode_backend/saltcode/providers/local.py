@@ -129,6 +129,7 @@ class LocalClient(LLMClient):
         json_schema: dict[str, Any] | None = None,
         model: str | None = None,
         contains_raw_source: bool = False,
+        temperature: float | None = None,
     ) -> str:
         """Run one completion on a Saltnitor router section.
 
@@ -144,13 +145,31 @@ class LocalClient(LLMClient):
                 leave the machine. The guard still enforces that rather than
                 trusting it — the exemption comes from the URL, so a Saltnitor
                 repointed off-box stops being exempt (REQ-GLB-003).
+            temperature: Overrides the `thinking`-derived default. Exists for one
+                caller: REQ-AUD-002 AC5 requires each of the N stability passes to
+                run under a *distinct condition*, and with temperature pinned to
+                `0.7 if thinking else 0.0` the passes were byte-identical requests
+                whose verdicts could only agree — `stability_score` was 1.0 by
+                construction and the confidence measure was decorative (G-005).
+                Deliberately not added to :class:`~saltcode.providers.base.LLMClient`:
+                the network-routed providers have no business varying sampling to
+                manufacture disagreement, and only this client is on-box.
+
+        Raises:
+            ValueError: `temperature` is outside the OpenAI-compatible range
+                ``[0.0, 2.0]``. Refused here rather than forwarded, because a
+                router that clamps silently would leave two "distinct" passes
+                identical and AC5 unsatisfied without anything reporting it.
         """
         profile = validate_profile(model or self.default_model)
+
+        if temperature is not None and not 0.0 <= temperature <= 2.0:
+            raise ValueError(f"temperature must be within [0.0, 2.0], got {temperature!r}")
 
         payload: dict[str, Any] = {
             "model": profile,
             "messages": messages,
-            "temperature": 0.7 if thinking else 0.0,
+            "temperature": (0.7 if thinking else 0.0) if temperature is None else temperature,
         }
         if json_schema:
             payload["response_format"] = {"type": "json_object", "schema": json_schema}

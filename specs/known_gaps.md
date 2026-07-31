@@ -65,20 +65,6 @@ combination, and limit flags are all unverified in practice.
 *Why it matters:* Docker is the fallback when `bwrap` is unavailable — exactly
 the situation where nobody wants to discover the fallback is broken.
 
-### - [ ] G-005 — The Auditor cannot vary temperature across stability passes
-**Severity:** MED · **Noticed:** Task 2.1 · **Closed by:** Task 10.1 ·
-**Where:** `saltcode_backend/saltcode/providers/local.py` (`LocalClient.chat`)
-
-REQ-AUD-002 AC5 requires each of the N=3 stability passes to use a distinct
-condition (temperature jitter, evidence reordering). `chat()` fixes temperature
-at `0.7 if thinking else 0.0` and exposes no parameter for it.
-
-*Why it matters:* without a distinct condition per pass the verdicts are
-trivially identical, `stability_score` is always `1.0`, and the confidence
-measure becomes decorative — the exact self-reported-confidence failure that
-BIFAI-NET's measured stability replaced. Deliberately left to Task 10.1 rather
-than folded into Task 2.
-
 ### - [ ] G-006 — The entrypoint exit-code scheme is a convention, not a contract
 **Severity:** LOW · **Noticed:** Task 1.7 · **Closed by:** Task 7b.2 ·
 **Where:** `saltcode_backend/saltcode/tools/_cli.py`
@@ -338,6 +324,50 @@ sentence classifier; the honest fix is for the extension to show the removal lis
 Decision 4 before the write lands (Task 13.9's cumulative review), so a wrong strip is
 seen rather than merely reversible.
 
+### - [ ] G-020 — `gac` has no defined index base
+**Severity:** LOW · **Noticed:** Task 10.1 · **Closed by:** a requirements amendment ·
+**Where:** `saltcode_backend/saltcode/stability/measure.py` (`compute_gac`),
+`saltcode/contracts/audit_result.py` (`StabilityInfo.gac`)
+
+The specs define `gac` only as "pass where verdict first stabilizes" (proposal v8 line
+397; design §9 repeats the phrase). Neither says whether passes are counted from 0 or 1,
+nor what the value is for a run that never settles. `StabilityInfo` constrains it to
+`>= 0` only, which admits both readings — and unlike `stability_score`, whose formula the
+contract re-derives and validates, nothing cross-checks `gac` at all.
+
+Implemented as the smallest reading consistent with the surrounding design: **1-based**,
+matching how `n_passes` counts, with a never-settling run stabilising on its final pass
+(a length-1 suffix is trivially constant). `[pass, impl_fail, pass]` therefore yields 3.
+Pinned by `test_gac_is_the_pass_the_verdict_last_settled_on` so a change is deliberate.
+
+*Why it matters:* little today, because nothing routes on `gac` — the escalation reads
+`stability_score`. It matters when Task 14b calibrates against a labelled set and when a
+human reads `audit_result.json`: an off-by-one in a field nobody validates is the kind of
+thing that survives for a year. The fix is one sentence in `specs/requirements.md`
+REQ-CON-006, not a code change.
+
+### - [ ] G-021 — A heuristic flag overrides a `spec_defect` judgment
+**Severity:** MED · **Noticed:** Task 10.2 · **Closed by:** a requirements amendment ·
+**Where:** `saltcode_backend/saltcode/stability/audit.py` (`resolve_reason`)
+
+REQ-AUD-001 AC1 reads: "WHEN a heuristic flag fires, THEN the verdict SHALL be
+`gaming_suspected` **unless judgment clears it**." Read literally — and it is implemented
+literally — "clears it" means the judgment answered `pass`; any other verdict leaves
+`gaming_suspected` standing.
+
+For `impl_fail` that costs nothing: both route to a Builder retry, and the gaming reason
+carries strictly more detail. For **`spec_defect` it costs a retry.** REQ-AUD-003 AC1 and
+REQ-FAIL-001 AC3 make `spec_defect` route to a Test-Intent re-spec and explicitly *not*
+consume a Builder retry; overriding it with `gaming_suspected` spends one of the three
+against a task whose spec the Auditor believes is wrong, and sends the Builder to fix
+code that may be correct.
+
+*Recommendation:* `spec_defect` should win over a heuristic flag — a flag says the code
+looks like it games the tests, and `spec_defect` says those tests should not be trusted,
+which is the more fundamental claim. That is a change to REQ-AUD-001 AC1's wording, so it
+belongs in the proposal → requirements, not in the code. Until then the code follows the
+requirement as written and says so in the emitted `detail`.
+
 ### - [ ] G-008 — `skills/` is an empty placeholder
 **Severity:** MED · **Noticed:** Task 0.2 · **Closed by:** Task 7.1c ·
 **Where:** `skills/`
@@ -354,6 +384,32 @@ no skills behind it.
 ---
 
 ## Closed
+
+### - [x] G-005 — The Auditor cannot vary temperature across stability passes
+**Severity:** MED · **Noticed:** Task 2.1 · **Closed by:** Task 10.1 ·
+**Closed:** 2026-07-31 ·
+**Where:** `saltcode_backend/saltcode/providers/local.py` (`LocalClient.chat`)
+
+REQ-AUD-002 AC5 requires each of the N=3 stability passes to use a distinct
+condition. `chat()` fixed temperature at `0.7 if thinking else 0.0` and exposed no
+parameter, so the passes were byte-identical requests whose verdicts could only
+agree: `stability_score` was 1.0 by construction and the confidence measure was
+decorative — exactly the self-reported-confidence failure BIFAI-NET's measured
+stability replaced.
+
+**Closed by** giving `chat` an optional `temperature`, and by varying a *second*
+condition that no server can silently neutralise. Temperature alone would not have
+closed it: a server is free to ignore, clamp or pin the sampling parameter — llama.cpp
+started with a fixed `--temp`, a router section that overrides it — and nothing in the
+response says so, which yields a perfect score and is worse than no score. Evidence
+reordering changes the request bytes, so it survives that.
+
+**Verified** by `tests/test_task_10_stability.py::test_the_passes_differ_in_temperature_and_in_prompt_bytes`,
+which reads the captured request payloads and asserts three distinct temperatures *and*
+three distinct prompts, and by `test_every_pass_runs_under_a_distinct_condition`. An
+out-of-range temperature is refused rather than forwarded
+(`test_an_out_of_range_temperature_is_refused_not_forwarded`), since silent clamping is
+the failure mode that would put the gap back without reporting it.
 
 ### - [x] G-003 — Uncommitted task specs will not exist in the sandbox
 **Closed 2026-07-29** · Noticed Task 3.1 · Closed by Task 9.3
