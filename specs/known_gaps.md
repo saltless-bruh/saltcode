@@ -438,6 +438,21 @@ so the declared path is live for an *installed* Saltcode but not for a working c
 developed in place; Task 7.3's spawn verification needs an install, a link, or
 `.pi/agents/`.
 
+**Confirmed empirically for `skills/` too, 2026-08-02 (Task 7.1b).** `pi` 0.82.1 ships at
+`node_modules/.bin/pi`, so this is testable here after all. `pi config -l --approve`
+reports its project resource root as **`Project (/home/user/saltcode/.agents/)`** and
+lists the 13 skills under `.agents/skills/`. The four skills authored into the repo-root
+`skills/` by 7.1b are **not** listed, even though `package.json` declares
+`"pi": {"skills": ["./skills"]}` — because that declaration is *package* scope, resolved
+when Saltcode is installed under `node_modules`, and a working copy is not.
+
+So the same split applies to all three resource kinds: `skills/`, `prompts/` and
+`agents/` are correct **for the shipped package** and invisible **to the working copy**,
+which sees `.agents/` instead. That is not a defect in the layout — design §17's tree is
+right for what ships — but it means **Task 7's "Skills are visible in `pi config`"
+Done-when leg cannot pass from a bare working copy**. It needs `pi install` (or a link
+into `node_modules`) first, and that step is currently written down nowhere.
+
 ### - [ ] G-025 — Two of design §17's six cookbooks cannot be shipped as they stand
 **Severity:** MED · **Noticed:** Task 7.1 · **Closed by:** Task 7.1c (needs a maintainer
 view) · **Where:** `COOKBOOKS.md`, `.agents/skills/git-pushing/`,

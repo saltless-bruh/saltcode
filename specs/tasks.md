@@ -214,7 +214,7 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 
 - [x] 7.0 **Pin the sub-agent extension contract before authoring anything.** Locate `pi-subagents` (or a substitute meeting the REQ-EXT-015 capability contract) and record its **actual** agent-definition schema — exact frontmatter keys for model, thinking level, tool allowlist, and skill preloading — plus its spawn API. Author `agents/*.md` against the documented schema, never a guessed one. If the schema cannot be established, STOP and raise it (`.claude/rules/stop-and-ask.md`) rather than inventing a format.
 - [x] 7.1 **Source and inventory the skills.** Audit what exists against design §17's 14 (8 `saltcode-*` + 6 cookbooks). For anything missing that is a *general* capability rather than Saltcode-specific, search reputable public sources rather than writing it from scratch — Anthropic's official skills repository, curated community collections, the Pi package gallery, and npm packages carrying the `pi-package` keyword. For each candidate record: source URL, licence, and last-updated date. Anything adopted is **trust-reviewed before install** (REQ-SEC-006) — these run with full system permissions — and its provenance noted in `COOKBOOKS.md`. Prefer a well-maintained upstream skill over a bespoke one; prefer a bespoke one over a stale or unlicensed import.
-- [ ] 7.1b **Author the 4 missing Saltcode skills** — `saltcode-architect`, `saltcode-planner`, `saltcode-test-intent`, `saltcode-compactor`. These encode this project's contracts and have no upstream equivalent, so they are written, not sourced. Each mirrors the agent's row in design §7 (inputs, outputs, hard rules) and cites the REQ ids it enforces.
+- [x] 7.1b **Author the 4 missing Saltcode skills** — `saltcode-architect`, `saltcode-planner`, `saltcode-test-intent`, `saltcode-compactor`. These encode this project's contracts and have no upstream equivalent, so they are written, not sourced. Each mirrors the agent's row in design §7 (inputs, outputs, hard rules) and cites the REQ ids it enforces.
 - [ ] 7.1c Place all 14 skills + the 3 new ones under `skills/` (SKILL.md folders) per design §17; verify they load via `pi config`.
 - [ ] 7.2 Author `agents/*.md` sub-agent definitions (for the sub-agent extension, e.g. `pi-subagents`) for Scout, Architect, Planner, Test Intent, Evaluator, Builder — each with frontmatter: model, thinking level, tool allowlist (per design §6), and its Saltcode skill **preloaded directly** into the prompt (do NOT rely on Pi's read-tool auto-discovery — locked-down agents lack `read`). The Auditor is NOT a sub-agent (its N-pass judgment is the backend `compute_stability` tool).
 - [ ] 7.2b **Agent-definition quality bar.** Every `agents/*.md` SHALL satisfy all of the following; a definition failing any point is not done:
@@ -277,6 +277,28 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
   checkpoint rule), and `python-pro` has no determinable licence against 7.1's own
   *"prefer a bespoke one over a stale or unlicensed import"*. Both are named in design
   §17, so declining them is a deviation and is asked, not taken silently.
+
+- **7.1b done (2026-08-02).** `skills/saltcode-{architect,planner,test-intent,compactor}/SKILL.md`,
+  written rather than sourced — they encode this project's contracts and have no upstream.
+  Each mirrors its row in design §7 (inputs, the exact artifact it writes, its hard rules)
+  and cites the REQ ids it enforces: Architect REQ-ARC-001/002/003 (no task list; every
+  constraint and anti-pattern carried through **verbatim**), Planner REQ-PLN-001/002
+  (`design.md` as sole input — *not* `context_report.json* — and an acyclic `depends_on`),
+  Test Intent REQ-TST-001/002 (project-configured framework, no implementation or
+  subject-supplying fixtures, specs immutable outside a `spec_defect` re-spec), Compactor
+  REQ-CMP-001 (byte-identical `## HARD CONSTRAINTS`, strip only outside it, and *keep when
+  unsure*). Each carries an explicit escalation section rather than leaving "stop and ask"
+  implicit, since a Phase-1 agent that invents a resolution produces something that reads
+  exactly like a plan.
+  > **`pi` 0.82.1 turned out to be available** at `node_modules/.bin/pi`, so the Done-when
+  > leg is testable here after all — and it immediately showed something. `pi config -l
+  > --approve` reports its project resource root as `Project (/home/user/saltcode/.agents/)`
+  > and lists the 13 skills under `.agents/skills/`; the four new ones under `skills/` are
+  > **not** listed, because `package.json`'s `"pi": {"skills": ["./skills"]}` is *package*
+  > scope and resolves only for an installed Saltcode. Same mechanism as **G-024**, now
+  > confirmed for skills as well as agents, and it means **Task 7's "visible in `pi config`"
+  > leg cannot pass from a bare working copy** — it needs `pi install` or a `node_modules`
+  > link first. Recorded in G-024; not worked around.
 
 ## Task 6 — Prefix assembly in `before_agent_start`  ·  deps: 5, 7, 13  ·  [CHANGED]
 - [ ] 6.1 In `before_agent_start`, assemble `[system(active agent) | design.md | frozen notes | per-call delta]`; return `{ systemPrompt, message }`. Read `event.systemPromptOptions` to respect user config. Pull frozen notes + design.md from the backend/Code-Wiki.
