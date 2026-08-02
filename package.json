@@ -15,7 +15,12 @@
     ],
     "prompts": [
       "./prompts"
-    ]
+    ],
+    "subagents": {
+      "agents": [
+        "./agents"
+      ]
+    }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

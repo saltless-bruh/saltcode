@@ -1,0 +1,237 @@
+"""Task 7.2 — the sub-agent definitions, and the invariant that keeps them honest.
+
+These are repo-root assets, not backend modules, but they are asserted from the backend
+lane because it is the only lane that runs assertions. `test_task_7b_entrypoints.py`
+already reaches up to `docs/entrypoints.md` the same way, so the precedent is set.
+
+**What actually needs guarding.** Design DD-16 requires each agent's skill to be preloaded
+into its system prompt. `pi-subagents` does not provide that (G-023), so the skill is
+inlined into the definition body, which `pi-subagents` uses as the child prompt verbatim.
+Inlining means the text exists twice, and text that exists twice drifts. The guard is
+`scripts/sync_agent_skills.py --check`: if a `SKILL.md` changes and the definition is not
+regenerated, or someone hand-edits between the markers, this fails.
+
+Without it the failure is silent and expensive — an agent whose prompt disagrees with its
+skill still loads, still spawns, and still produces plausible output.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+AGENTS_DIR = REPO_ROOT / "agents"
+SKILLS_DIR = REPO_ROOT / "skills"
+SYNC_SCRIPT = REPO_ROOT / "scripts" / "sync_agent_skills.py"
+
+AGENTS: tuple[str, ...] = ("scout", "architect", "planner", "test-intent", "evaluator", "builder")
+"""The six spawned sub-agents (design §7). The Auditor is deliberately absent — its
+N-pass judgment is the backend `compute_stability` tool, not a spawned agent (§5.6a)."""
+
+_FRONTMATTER_RE = re.compile(r"\A---\n(?P<body>.*?)\n---\n", re.DOTALL)
+
+
+def frontmatter(name: str) -> dict[str, str]:
+    text = (AGENTS_DIR / f"{name}.md").read_text(encoding="utf-8")
+    match = _FRONTMATTER_RE.match(text)
+    assert match is not None, f"{name}.md has no frontmatter, so no agent would load from it"
+    fields: dict[str, str] = {}
+    for line in match.group("body").splitlines():
+        if ":" in line and not line.startswith((" ", "\t", "-")):
+            key, _, value = line.partition(":")
+            fields[key.strip()] = value.strip()
+    return fields
+
+
+def body(name: str) -> str:
+    text = (AGENTS_DIR / f"{name}.md").read_text(encoding="utf-8")
+    match = _FRONTMATTER_RE.match(text)
+    return text[match.end() :] if match else text
+
+
+# ------------------------------------------------------------------ the drift guard
+
+
+def test_every_agent_definition_is_in_sync_with_its_skill() -> None:
+    """The one that matters. See the module docstring."""
+    completed = subprocess.run(
+        [sys.executable, str(SYNC_SCRIPT), "--check"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        timeout=120,
+        check=False,
+    )
+    assert completed.returncode == 0, (
+        f"agent definitions are stale against their skills:\n{completed.stderr}"
+    )
+
+
+def test_the_sync_script_detects_a_hand_edit_between_the_markers(tmp_path: Path) -> None:
+    """A guard that cannot fail is not a guard.
+
+    Proves `--check` actually compares content rather than merely finding the markers —
+    otherwise the test above would pass on a definition whose skill block had been
+    emptied.
+    """
+    scratch = tmp_path / "repo"
+    (scratch / "agents").mkdir(parents=True)
+    (scratch / "skills" / "demo").mkdir(parents=True)
+    (scratch / "scripts").mkdir()
+
+    (scratch / "skills" / "demo" / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: d\n---\n\nThe real skill text.\n", encoding="utf-8"
+    )
+    (scratch / "agents" / "demo.md").write_text(
+        "---\nname: demo\ndescription: d\nskill-source: skills/demo/SKILL.md\n---\n\n"
+        "# Demo\n\n"
+        "<!-- BEGIN SKILL: skills/demo/SKILL.md — generated, do not edit between markers -->\n"
+        "Something a human typed instead.\n"
+        "<!-- END SKILL -->\n",
+        encoding="utf-8",
+    )
+    (scratch / "scripts" / "sync_agent_skills.py").write_bytes(SYNC_SCRIPT.read_bytes())
+
+    stale = subprocess.run(
+        [sys.executable, str(scratch / "scripts" / "sync_agent_skills.py"), "--check"],
+        capture_output=True, text=True, cwd=scratch, timeout=120, check=False,
+    )
+    assert stale.returncode == 1, "a hand-edited skill block was reported as in sync"
+    assert "demo.md" in stale.stderr
+
+    fixed = subprocess.run(
+        [sys.executable, str(scratch / "scripts" / "sync_agent_skills.py")],
+        capture_output=True, text=True, cwd=scratch, timeout=120, check=False,
+    )
+    assert fixed.returncode == 0
+    assert "The real skill text." in (scratch / "agents" / "demo.md").read_text(encoding="utf-8")
+
+
+# ------------------------------------------------------- the roster and the schema
+
+
+def test_the_six_spawned_agents_exist_and_the_auditor_does_not() -> None:
+    on_disk = {p.stem for p in AGENTS_DIR.glob("*.md")}
+    assert on_disk == set(AGENTS), f"unexpected: {sorted(on_disk ^ set(AGENTS))}"
+    assert "auditor" not in on_disk, "the Auditor is a backend tool, not a spawned sub-agent (§5.6a)"
+
+
+@pytest.mark.parametrize("name", AGENTS)
+def test_required_frontmatter_keys_are_present(name: str) -> None:
+    """`pi-subagents` skips a definition lacking `name` or `description` *silently*."""
+    fields = frontmatter(name)
+    assert fields.get("name", "").startswith("saltcode-")
+    assert len(fields.get("description", "")) > 20
+
+
+@pytest.mark.parametrize("name", AGENTS)
+def test_each_definition_replaces_the_prompt_and_inherits_nothing(name: str) -> None:
+    """REQ-EXT-012: an isolated context, not the parent's with extras.
+
+    `systemPromptMode: replace` is also what makes the inlined skill the *whole* prompt
+    rather than an appendix to Pi's base one.
+    """
+    fields = frontmatter(name)
+    assert fields.get("systemPromptMode") == "replace"
+    assert fields.get("inheritProjectContext") == "false"
+    assert fields.get("inheritSkills") == "false"
+
+
+@pytest.mark.parametrize("name", AGENTS)
+def test_each_definition_declares_its_skill_source(name: str) -> None:
+    source = frontmatter(name).get("skill-source", "")
+    assert source.startswith("skills/saltcode-")
+    assert (REPO_ROOT / source).is_file()
+
+
+# --------------------------------------------------------------- the hard boundaries
+
+
+def test_scout_holds_no_file_body_capability() -> None:
+    """The privacy boundary, asserted as absence rather than as a promise.
+
+    REQ-SCT-001 and `.claude/rules/privacy-boundary.md`: Scout is the one Phase-1 agent
+    touching the repository, and it is API-routed, so a body-reading tool in its allowlist
+    is a path from raw source to a network provider. Absent capability beats blocked
+    capability (7.2b point 4).
+    """
+    tools = frontmatter("scout").get("tools", "")
+    assert "read_scoped" not in tools
+    assert not re.search(r"\bread\b", tools), f"scout must hold no read tool; got: {tools}"
+    assert "bash" not in tools
+
+
+def test_only_the_builder_may_read_file_bodies() -> None:
+    """It runs on a local model, which is the entire reason it is allowed to."""
+    assert "saltcode_read_scoped" in frontmatter("builder").get("tools", "")
+    for name in set(AGENTS) - {"builder"}:
+        assert "saltcode_read_scoped" not in frontmatter(name).get("tools", ""), name
+
+
+def test_no_agent_holds_a_shell() -> None:
+    """`bash` would route around every tool-level boundary at once."""
+    for name in AGENTS:
+        assert "bash" not in frontmatter(name).get("tools", ""), name
+
+
+@pytest.mark.parametrize("name", AGENTS)
+def test_each_definition_states_its_negative_scope_and_escalation(name: str) -> None:
+    """7.2b points 2 and 6 — the two sections most likely to be dropped when adding an
+    agent later, and the two that keep one agent from absorbing another's job."""
+    text = body(name)
+    assert "You do NOT do these things" in text, f"{name}: no negative-scope section"
+    assert re.search(r"When you cannot (proceed|answer|decide)|## Escalation", text), (
+        f"{name}: no escalation section"
+    )
+
+
+@pytest.mark.parametrize("name", AGENTS)
+def test_each_definition_cites_the_requirements_it_satisfies(name: str) -> None:
+    """7.2b point 9. A definition with no REQ trace cannot be reviewed against anything."""
+    assert re.search(r"REQ-[A-Z]{3,4}-\d{3}", body(name)), f"{name}: no REQ ids cited"
+
+
+# ------------------------------------------------------------------------- routing
+
+
+ROUTING: dict[str, tuple[str, str | None]] = {
+    # design §6: base model, and the static thinking level where one applies.
+    "scout": ("deepseek/v4-flash", "off"),
+    "architect": ("deepseek/v4-pro", "high"),
+    "planner": ("deepseek/v4-flash", "off"),
+    "test-intent": ("deepseek/v4-flash", "off"),
+    "evaluator": ("deepseek/v4-flash", "off"),
+    # The Builder's thinking is set per task (the VRAM triangle), so no static level.
+    "builder": ("saltnitor/A_STD", None),
+}
+
+
+@pytest.mark.parametrize("name", AGENTS)
+def test_model_and_thinking_match_design_section_6(name: str) -> None:
+    model, thinking = ROUTING[name]
+    fields = frontmatter(name)
+    assert fields.get("model") == model
+    if thinking is None:
+        assert "thinking" not in fields, f"{name} must not pin a static thinking level"
+    else:
+        assert fields.get("thinking") == thinking
+
+
+def test_the_json_emitting_agents_have_thinking_off() -> None:
+    """REQ-EXT-003 / design §6: reasoning traces corrupt a JSON contract."""
+    for name in ("scout", "planner", "test-intent", "evaluator"):
+        assert frontmatter(name).get("thinking") == "off", name
+
+
+def test_every_skill_under_skills_has_valid_frontmatter() -> None:
+    """A skill Pi cannot parse is a skill that silently does not load."""
+    for skill in sorted(SKILLS_DIR.glob("*/SKILL.md")):
+        match = _FRONTMATTER_RE.match(skill.read_text(encoding="utf-8"))
+        assert match is not None, f"{skill.parent.name}: no frontmatter"
+        assert re.search(r"^name:\s*\S+", match.group("body"), re.M), skill.parent.name
+        assert re.search(r"^description:\s*\S+", match.group("body"), re.M), skill.parent.name

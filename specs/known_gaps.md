@@ -512,6 +512,33 @@ rule, apply it to all five, and add the missing conformance probe — but the en
 belong to Tasks 9/10/12/14b, so Task 7b reports it rather than editing them
 (`.claude/rules/stop-and-ask.md`).
 
+### - [ ] G-027 — The Builder skill sends the Builder to the wrong directory for its spec
+**Severity:** MED · **Noticed:** Task 7.2 · **Closed by:** unassigned (a one-line skill
+edit) · **Where:** `skills/saltcode-builder/SKILL.md` line 13,
+`.agents/skills/saltcode-builder/SKILL.md`
+
+The skill instructs: *"Read the task's spec file: `.saltcode/tests/task_{id}_spec.*`"*.
+
+Every other authority says `tests/task_{id}_spec.*`, at the repository root — design §9
+and §7's roster row, REQ-CON-004, and the implementation itself:
+`static_gate/test_runner.py` globs `tests_dir / f"task_{task_id}_spec.*"` and reports
+*"no `tests/task_{task_id}_spec.*` exists in the live tree"* on a miss. Test Intent writes
+there, and G-003's resolution copies from there into the sandbox.
+
+So the `.saltcode/` prefix is simply wrong, and it is carried-over text from the
+pre-v9 standalone build.
+
+*Why it matters more now:* until Task 7.2 this string sat in a skill nothing loaded. It is
+now **inlined into the Builder's system prompt** (DD-16 / G-023), so it is live
+instruction to the agent. A Builder that looks in `.saltcode/tests/` finds nothing, and its
+most likely recovery — proceeding without reading the spec — is the one that makes the
+task-spec gate meaningless while still going green on everything upstream of it.
+
+*Not fixed here:* the skill is a Task 7.1 asset and 7.2 does not own it
+(`.claude/rules/stop-and-ask.md`: adjacent breakage is reported, not fixed). The fix is
+deleting `.saltcode/` from that one line, in both copies, and re-running
+`scripts/sync_agent_skills.py`.
+
 ### - [ ] G-008 — `skills/` is an empty placeholder
 **Severity:** MED · **Noticed:** Task 0.2 · **Closed by:** Task 7.1c ·
 **Where:** `skills/`

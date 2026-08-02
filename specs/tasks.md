@@ -216,7 +216,7 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 - [x] 7.1 **Source and inventory the skills.** Audit what exists against design §17's 14 (8 `saltcode-*` + 6 cookbooks). For anything missing that is a *general* capability rather than Saltcode-specific, search reputable public sources rather than writing it from scratch — Anthropic's official skills repository, curated community collections, the Pi package gallery, and npm packages carrying the `pi-package` keyword. For each candidate record: source URL, licence, and last-updated date. Anything adopted is **trust-reviewed before install** (REQ-SEC-006) — these run with full system permissions — and its provenance noted in `COOKBOOKS.md`. Prefer a well-maintained upstream skill over a bespoke one; prefer a bespoke one over a stale or unlicensed import.
 - [x] 7.1b **Author the 4 missing Saltcode skills** — `saltcode-architect`, `saltcode-planner`, `saltcode-test-intent`, `saltcode-compactor`. These encode this project's contracts and have no upstream equivalent, so they are written, not sourced. Each mirrors the agent's row in design §7 (inputs, outputs, hard rules) and cites the REQ ids it enforces.
 - [ ] 7.1c Place all 14 skills + the 3 new ones under `skills/` (SKILL.md folders) per design §17; verify they load via `pi config`.
-- [ ] 7.2 Author `agents/*.md` sub-agent definitions (for the sub-agent extension, e.g. `pi-subagents`) for Scout, Architect, Planner, Test Intent, Evaluator, Builder — each with frontmatter: model, thinking level, tool allowlist (per design §6), and its Saltcode skill **preloaded directly** into the prompt (do NOT rely on Pi's read-tool auto-discovery — locked-down agents lack `read`). The Auditor is NOT a sub-agent (its N-pass judgment is the backend `compute_stability` tool).
+- [x] 7.2 Author `agents/*.md` sub-agent definitions (for the sub-agent extension, e.g. `pi-subagents`) for Scout, Architect, Planner, Test Intent, Evaluator, Builder — each with frontmatter: model, thinking level, tool allowlist (per design §6), and its Saltcode skill **preloaded directly** into the prompt (do NOT rely on Pi's read-tool auto-discovery — locked-down agents lack `read`). The Auditor is NOT a sub-agent (its N-pass judgment is the backend `compute_stability` tool).
 - [ ] 7.2b **Agent-definition quality bar.** Every `agents/*.md` SHALL satisfy all of the following; a definition failing any point is not done:
   1. **Identity** — one paragraph naming who the agent is and the single job it owns. One responsibility per agent; no agent has a second job.
   2. **Negative scope** — an explicit "you do NOT do this" list, naming the neighbouring agents' jobs it must not absorb (e.g. Architect never writes a task list; Planner never reads `context_report.json`).
@@ -299,6 +299,38 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
   > confirmed for skills as well as agents, and it means **Task 7's "visible in `pi config`"
   > leg cannot pass from a bare working copy** — it needs `pi install` or a `node_modules`
   > link first. Recorded in G-024; not worked around.
+
+- **7.2 done (2026-08-02); 7.2b's ten points are asserted, not asserted-to.** Six
+  definitions in `agents/` — Scout, Architect, Planner, Test Intent, Evaluator, Builder.
+  The Auditor is deliberately absent and a test pins that: its N-pass judgment is the
+  backend `compute_stability` tool, not a spawned agent (design §5.6a). Each carries the
+  frontmatter the pinned schema actually reads (`docs/subagent_contract.md` §3), an
+  identity paragraph, a **negative-scope** section naming the neighbouring jobs it must not
+  absorb, named input/output artifacts, a one-line justification per tool, an escalation
+  section, its design §6 routing, and the REQ ids it satisfies.
+  > **Skill delivery, per the maintainer's G-023 decision.** The skill is **inlined into
+  > the definition body**, which `pi-subagents` uses as the child system prompt verbatim
+  > under `systemPromptMode: replace` — no tool call, no `read`, satisfying DD-16 by
+  > construction. `skills/saltcode-*/SKILL.md` stays the single hand-authored source;
+  > `scripts/sync_agent_skills.py` splices it between markers from a `skill-source:`
+  > frontmatter key, and `--check` fails on drift. The guard is itself tested against a
+  > hand-edited block, because a guard that cannot fail is not a guard.
+  > **Also done here, from 7.1c:** the four pre-existing `saltcode-*` skills were placed
+  > under `skills/` (they were only in `.agents/`, Antigravity's copy) — unblocked work,
+  > since G-025 concerns only the two cookbooks. `skills/` now holds all eight
+  > `saltcode-*`; the six cookbooks and the three 7.4 skills remain.
+  > **`package.json` now declares `pi.subagents.agents: ["./agents"]`**, the G-024 fix —
+  > design §17's tree is unchanged and the definitions become discoverable for an
+  > installed package.
+  > **Found, not fixed: G-027.** The carried-over Builder skill tells the Builder to read
+  > `.saltcode/tests/task_{id}_spec.*`; every other authority — design §9, REQ-CON-004,
+  > and `test_runner.py` itself — says `tests/task_{id}_spec.*`. Harmless while nothing
+  > loaded that skill; now it is live instruction in the Builder's prompt, and the likely
+  > recovery from "spec not found" is to proceed without it, which hollows out the
+  > task-spec gate while everything upstream stays green. It is a 7.1 asset, so 7.2
+  > reports it.
+  > **Still open on this task:** 7.1c (blocked, G-025), 7.3 and 7.3b (need `pi install` or
+  > a `node_modules` link — G-024), 7.4.
 
 ## Task 6 — Prefix assembly in `before_agent_start`  ·  deps: 5, 7, 13  ·  [CHANGED]
 - [ ] 6.1 In `before_agent_start`, assemble `[system(active agent) | design.md | frozen notes | per-call delta]`; return `{ systemPrompt, message }`. Read `event.systemPromptOptions` to respect user config. Pull frozen notes + design.md from the backend/Code-Wiki.
