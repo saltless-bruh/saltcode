@@ -185,7 +185,7 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 > unchanged.
 
 - [x] 7.0 **Pin the sub-agent extension contract before authoring anything.** Locate `pi-subagents` (or a substitute meeting the REQ-EXT-015 capability contract) and record its **actual** agent-definition schema — exact frontmatter keys for model, thinking level, tool allowlist, and skill preloading — plus its spawn API. Author `agents/*.md` against the documented schema, never a guessed one. If the schema cannot be established, STOP and raise it (`.claude/rules/stop-and-ask.md`) rather than inventing a format.
-- [ ] 7.1 **Source and inventory the skills.** Audit what exists against design §17's 14 (8 `saltcode-*` + 6 cookbooks). For anything missing that is a *general* capability rather than Saltcode-specific, search reputable public sources rather than writing it from scratch — Anthropic's official skills repository, curated community collections, the Pi package gallery, and npm packages carrying the `pi-package` keyword. For each candidate record: source URL, licence, and last-updated date. Anything adopted is **trust-reviewed before install** (REQ-SEC-006) — these run with full system permissions — and its provenance noted in `COOKBOOKS.md`. Prefer a well-maintained upstream skill over a bespoke one; prefer a bespoke one over a stale or unlicensed import.
+- [x] 7.1 **Source and inventory the skills.** Audit what exists against design §17's 14 (8 `saltcode-*` + 6 cookbooks). For anything missing that is a *general* capability rather than Saltcode-specific, search reputable public sources rather than writing it from scratch — Anthropic's official skills repository, curated community collections, the Pi package gallery, and npm packages carrying the `pi-package` keyword. For each candidate record: source URL, licence, and last-updated date. Anything adopted is **trust-reviewed before install** (REQ-SEC-006) — these run with full system permissions — and its provenance noted in `COOKBOOKS.md`. Prefer a well-maintained upstream skill over a bespoke one; prefer a bespoke one over a stale or unlicensed import.
 - [ ] 7.1b **Author the 4 missing Saltcode skills** — `saltcode-architect`, `saltcode-planner`, `saltcode-test-intent`, `saltcode-compactor`. These encode this project's contracts and have no upstream equivalent, so they are written, not sourced. Each mirrors the agent's row in design §7 (inputs, outputs, hard rules) and cites the REQ ids it enforces.
 - [ ] 7.1c Place all 14 skills + the 3 new ones under `skills/` (SKILL.md folders) per design §17; verify they load via `pi config`.
 - [ ] 7.2 Author `agents/*.md` sub-agent definitions (for the sub-agent extension, e.g. `pi-subagents`) for Scout, Architect, Planner, Test Intent, Evaluator, Builder — each with frontmatter: model, thinking level, tool allowlist (per design §6), and its Saltcode skill **preloaded directly** into the prompt (do NOT rely on Pi's read-tool auto-discovery — locked-down agents lack `read`). The Auditor is NOT a sub-agent (its N-pass judgment is the backend `compute_stability` tool).
@@ -224,6 +224,31 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
   exist (the definition body becomes the system prompt verbatim), but choosing it means
   the skill text lives in two places and needs a drift guard — a design decision, not an
   implementation detail, so it is asked rather than assumed.
+  > **Answered (maintainer, 2026-08-02): inline the skill into the agent body**, with
+  > `skills/saltcode-*/SKILL.md` staying canonical for Pi's catalogue and interactive use
+  > and a test failing on drift. G-023 is unblocked; 7.2 authors against that shape.
+
+- **7.1 done (2026-08-02).** Inventory against design §17's 17 (8 `saltcode-*` + 6
+  cookbooks + 3 new): **all six cookbooks are present**, so the "search reputable public
+  sources" leg had no work to do — every skill still missing is Saltcode-specific and is
+  written, not sourced (4 in 7.1b, 3 in 7.4). Provenance and the REQ-SEC-006 trust review
+  are recorded in the new `COOKBOOKS.md`. Origin was established from local evidence
+  rather than assumed: `.agents/.antigravity-install-manifest.json` shows all eight
+  third-party skills arrived in **one bulk Antigravity marketplace install** (1,679
+  entries, 2026-06-20), and no `saltcode-*` skill appears in it. Per-skill upstreams are
+  content-matched and labelled by confidence — `obra/superpowers` (MIT) is a **High**
+  match for `test-driven-development` and `systematic-debugging` because the vendored
+  auxiliary files (`testing-anti-patterns.md`, `condition-based-waiting-example.ts`) are
+  exactly the ones the upstream's own inventory names; `mcp-builder` is **Certain**, its
+  Apache 2.0 `LICENSE.txt` travelling with the copy. **Five of the eight carried
+  `risk: unknown` — no trust review had ever been completed on any of them.** All four
+  executables were read in full; no malicious content anywhere. Two findings block 7.1c
+  and are **G-025**: `git-pushing` cannot ship (`smart_commit.sh` runs
+  `git add . && git commit && git push` unconditionally, contradicting *"no automatic
+  `git push` unless `auto_push = true`, in any mode"* and the uncommitted-until-regression
+  checkpoint rule), and `python-pro` has no determinable licence against 7.1's own
+  *"prefer a bespoke one over a stale or unlicensed import"*. Both are named in design
+  §17, so declining them is a deviation and is asked, not taken silently.
 
 ## Task 6 — Prefix assembly in `before_agent_start`  ·  deps: 5, 7, 13  ·  [CHANGED]
 - [ ] 6.1 In `before_agent_start`, assemble `[system(active agent) | design.md | frozen notes | per-call delta]`; return `{ systemPrompt, message }`. Read `event.systemPromptOptions` to respect user config. Pull frozen notes + design.md from the backend/Code-Wiki.

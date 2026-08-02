@@ -438,6 +438,40 @@ so the declared path is live for an *installed* Saltcode but not for a working c
 developed in place; Task 7.3's spawn verification needs an install, a link, or
 `.pi/agents/`.
 
+### - [ ] G-025 — Two of design §17's six cookbooks cannot be shipped as they stand
+**Severity:** MED · **Noticed:** Task 7.1 · **Closed by:** Task 7.1c (needs a maintainer
+view) · **Where:** `COOKBOOKS.md`, `.agents/skills/git-pushing/`,
+`.agents/skills/python-pro/`, `specs/design.md` §17
+
+The 7.1 trust review found no malicious content in any of the eight third-party skills.
+It did find that two of the six cookbooks design §17 names cannot be adopted as-is, so
+7.1c ("place all 14 skills under `skills/`") cannot be completed literally.
+
+**`git-pushing`** ships `scripts/smart_commit.sh`, which runs `git add .` → `git commit`
+→ `git push -u origin $BRANCH` unconditionally. That contradicts
+`.claude/rules/project-architecture.md` twice over: *"no automatic `git push` unless
+`auto_push = true`, in any mode"*, and the checkpoint rule that the tree stays
+**uncommitted** until the regression gate passes. A `git add .` mid-task would commit the
+un-cleared apply along with `.saltcode/` state and Test Intent's uncommitted
+`tests/task_*_spec.*`. Its own frontmatter already declares `risk: critical`.
+
+**`python-pro`** has no determinable licence — it is prose-only and entirely benign, but
+task 7.1 says to *"prefer a bespoke one over a stale or unlicensed import"*, so shipping
+it would contradict the instruction governing its own adoption.
+
+*Why it matters:* design §17's tree names both, so declining them is a deviation from the
+spec and must be a decision rather than an omission. Three routes for `git-pushing`: drop
+it (the capability is already covered by this repo's own git rules), replace it with a
+bespoke skill that honours `auto_push` and the checkpoint boundary, or adopt it with the
+script removed and the prose kept. For `python-pro`: confirm the upstream licence, or
+replace it. **Neither is shipped under `skills/` until this is answered**; both remain in
+`.agents/skills/` as working copies.
+
+*Also recorded:* five of the eight carried `risk: unknown`, meaning no trust review had
+ever been completed on any of them. That is now done and written down in `COOKBOOKS.md`.
+Two further skills (`agent-evaluation`, `ai-agents-architect`) exist locally but are not
+in design §17 and are not adopted.
+
 ### - [ ] G-008 — `skills/` is an empty placeholder
 **Severity:** MED · **Noticed:** Task 0.2 · **Closed by:** Task 7.1c ·
 **Where:** `skills/`
