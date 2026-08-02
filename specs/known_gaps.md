@@ -383,6 +383,61 @@ neighbourhood that is not really dense. Quartiles are also a poor fit for a smal
 calibration set, where they are dominated by a handful of values. The fix is a sentence
 in REQ-CACHE-003 or design §11.9 naming the estimator, not a code change.
 
+### - [ ] G-023 — DD-16's "preload the skill into the sub-agent prompt" is not a feature that exists
+**Severity:** HIGH · **Noticed:** Task 7.0 · **Closed by:** Task 7.2 (blocked on a
+maintainer decision) · **Where:** `specs/design.md` DD-16 and §5.9, `specs/tasks.md`
+task 7.2, `docs/subagent_contract.md` §4
+
+Design DD-16 says each agent's skill is "**preloaded** into its sub-agent system prompt
+(a feature of the sub-agent extension)", and task 7.2 requires the skill "preloaded
+directly into the prompt (do NOT rely on Pi's read-tool auto-discovery — locked-down
+agents lack `read`)". **`pi-subagents@0.40.0` has no such feature.** Its `skills:`
+frontmatter resolves to `buildSkillInjection` (`src/agents/skills.ts:671-690`), which
+appends a *manifest* — name, description, and a `<location>` file path — under the
+instruction "Use the read tool to load a skill's file". That is the read-tool dependency
+DD-16 was written to avoid, reproduced by the mechanism DD-16 named as the cure.
+
+The obvious escape is closed: granting `read` to the locked-down agents is forbidden by
+`.claude/rules/privacy-boundary.md` and REQ-MCP-001, and Scout specifically must hold no
+file-body capability at all.
+
+*Why it matters:* it is invisible in exactly the way that costs a debugging session. A
+definition carrying `skills: saltcode-scout` loads without error, spawns without error,
+and produces an agent that never sees its skill — because the one tool it would need to
+fetch it is the one tool it must never have. Every behavioural REQ under Task 7's
+**Satisfies** (REQ-SCT/ARC/PLN/TST/EVL/BLD) rides on the skill actually being in the
+prompt, so all six agents silently lose their contract.
+
+*Available resolution:* the definition's Markdown **body** becomes the child system
+prompt verbatim (`agents.ts:1541`, with `systemPromptMode: replace`) — no tool call, no
+`read`. So preloading is achievable by putting the skill's content in the agent body
+instead of naming it in `skills:`. The cost is one source of truth becoming two
+(`skills/saltcode-*/SKILL.md` for Pi's catalogue and interactive use, the agent body for
+the spawn), which needs a generator or a drift test. **Raised to the maintainer
+2026-08-02; authoring of `agents/*.md` is stopped until it is answered**
+(`.claude/rules/stop-and-ask.md`).
+
+### - [ ] G-024 — A repo-root `agents/` directory is read by nothing until it is declared
+**Severity:** MED · **Noticed:** Task 7.0 · **Closed by:** Task 7.2 · **Where:**
+`package.json`, `specs/design.md` §17, `docs/subagent_contract.md` §2
+
+Design §17's tree puts the sub-agent definitions at `agents/` in the repo root.
+`pi-subagents` discovers project agents from `<root>/.agents/` and `<root>/.pi/agents/`
+only; a bare `agents/` is scanned by no default path. This is the same class of finding
+as **G-011** (`mcp.json` sitting where no MCP client looks), found the same way.
+
+Unlike G-011 it has a clean fix that preserves the design: package-scope discovery reads
+the package's own `package.json` and accepts `"pi": {"subagents": {"agents": ["./agents"]}}`,
+resolved against the package root. Saltcode already ships as a Pi package with a `pi`
+key, so this is one addition and no relocation.
+
+*Why it matters:* the failure is silent — `loadAgentsFromDir` skips unreadable or
+frontmatter-less files without diagnostics, so "no agents found" and "agents in the
+wrong place" look identical. Also note package roots are collected from `node_modules`,
+so the declared path is live for an *installed* Saltcode but not for a working copy
+developed in place; Task 7.3's spawn verification needs an install, a link, or
+`.pi/agents/`.
+
 ### - [ ] G-008 — `skills/` is an empty placeholder
 **Severity:** MED · **Noticed:** Task 0.2 · **Closed by:** Task 7.1c ·
 **Where:** `skills/`

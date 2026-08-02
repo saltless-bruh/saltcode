@@ -184,7 +184,7 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 > REQ-EXT-016 already mandate the substance, so `requirements.md` and `design.md` are
 > unchanged.
 
-- [ ] 7.0 **Pin the sub-agent extension contract before authoring anything.** Locate `pi-subagents` (or a substitute meeting the REQ-EXT-015 capability contract) and record its **actual** agent-definition schema — exact frontmatter keys for model, thinking level, tool allowlist, and skill preloading — plus its spawn API. Author `agents/*.md` against the documented schema, never a guessed one. If the schema cannot be established, STOP and raise it (`.claude/rules/stop-and-ask.md`) rather than inventing a format.
+- [x] 7.0 **Pin the sub-agent extension contract before authoring anything.** Locate `pi-subagents` (or a substitute meeting the REQ-EXT-015 capability contract) and record its **actual** agent-definition schema — exact frontmatter keys for model, thinking level, tool allowlist, and skill preloading — plus its spawn API. Author `agents/*.md` against the documented schema, never a guessed one. If the schema cannot be established, STOP and raise it (`.claude/rules/stop-and-ask.md`) rather than inventing a format.
 - [ ] 7.1 **Source and inventory the skills.** Audit what exists against design §17's 14 (8 `saltcode-*` + 6 cookbooks). For anything missing that is a *general* capability rather than Saltcode-specific, search reputable public sources rather than writing it from scratch — Anthropic's official skills repository, curated community collections, the Pi package gallery, and npm packages carrying the `pi-package` keyword. For each candidate record: source URL, licence, and last-updated date. Anything adopted is **trust-reviewed before install** (REQ-SEC-006) — these run with full system permissions — and its provenance noted in `COOKBOOKS.md`. Prefer a well-maintained upstream skill over a bespoke one; prefer a bespoke one over a stale or unlicensed import.
 - [ ] 7.1b **Author the 4 missing Saltcode skills** — `saltcode-architect`, `saltcode-planner`, `saltcode-test-intent`, `saltcode-compactor`. These encode this project's contracts and have no upstream equivalent, so they are written, not sourced. Each mirrors the agent's row in design §7 (inputs, outputs, hard rules) and cites the REQ ids it enforces.
 - [ ] 7.1c Place all 14 skills + the 3 new ones under `skills/` (SKILL.md folders) per design §17; verify they load via `pi config`.
@@ -205,6 +205,25 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 - [ ] 7.4 Author the 3 new skills (SKILL.md, valid `name`/`description`): `saltcode-lsp-usage` (symbols/outline before bodies, stay in `files_affected`, never emit raw source — preload for Scout + Builder), `saltcode-delegation` (agent selection, serial-when-dependent, complete zero-context task prompts), `saltcode-checkpoint-ops` (`/checkpoints`, `/rollback`, reading regression failures).
 - **Satisfies:** REQ-SCT/ARC/PLN/TST/EVL/BLD/AUD (behavioral), REQ-EXT-003, REQ-EXT-012, REQ-EXT-015 (dependency contract), REQ-EXT-016, REQ-SEC-006 (trust review of adopted skills).
 - **Done when:** all 14 base skills + 3 new skills load, and the package's **Skills are visible in `pi config`** under the project package (inherited from Task 0's gate, which cannot assert this because `skills/` is empty until 7.1c fills it); every adopted third-party skill has its source, licence and trust review recorded in `COOKBOOKS.md`; each of the 6 sub-agent definitions spawns in an isolated context with its skill present in-prompt even when it lacks `read`, producing the expected behavior on the fixture repo with only its allowed tools; **every definition satisfies all ten points of the 7.2b quality bar, and every forbidden action in 7.3b is demonstrably blocked**; the routing table resolves a model + thinking level for every (agent, state).
+
+- **7.0 done (2026-08-02); 7.2 is STOPPED on a maintainer decision.** The contract is
+  pinned in `docs/subagent_contract.md` from the `pi-subagents@0.40.0` tarball (MIT, npm,
+  read not installed — adoption stays a REQ-SEC-006 trust decision, as G-011 left the MCP
+  client). Recorded: the discovery paths, the full frontmatter schema read from
+  `src/agents/agents.ts:1428-1560` rather than the README, the thinking-level mapping, and
+  the three spawn surfaces (the `subagent` tool, the `pi-subagents/delegation` event
+  contract, and `pi-subagents/preflight`). One piece of good news — its peers are on the
+  **post-rename** `@earendil-works/*` scope, so the sub-agent half of DD-15 does not carry
+  G-011's load-failure risk. Two findings, both of the "reads a file nobody looks at" class
+  that 7.0 exists to catch: **G-024** — a repo-root `agents/` is scanned by no default path
+  (fixable with one `package.json` key, design §17's tree unchanged); and **G-023**, which
+  blocks 7.2 — **DD-16's "preload the skill into the sub-agent prompt" names a feature that
+  does not exist.** `skills:` emits a manifest plus "use the read tool to load a skill's
+  file", which is the exact read-tool dependency DD-16 was written to avoid, and granting
+  `read` is barred by the privacy boundary. A mechanism achieving DD-16's *intent* does
+  exist (the definition body becomes the system prompt verbatim), but choosing it means
+  the skill text lives in two places and needs a drift guard — a design decision, not an
+  implementation detail, so it is asked rather than assumed.
 
 ## Task 6 — Prefix assembly in `before_agent_start`  ·  deps: 5, 7, 13  ·  [CHANGED]
 - [ ] 6.1 In `before_agent_start`, assemble `[system(active agent) | design.md | frozen notes | per-call delta]`; return `{ systemPrompt, message }`. Read `event.systemPromptOptions` to respect user config. Pull frozen notes + design.md from the backend/Code-Wiki.
