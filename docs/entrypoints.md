@@ -2,7 +2,7 @@
 
 Every backend capability is a standalone module runnable as:
 
-```
+```shell
 python -m saltcode.tools.<name> [args]
 ```
 
@@ -28,8 +28,19 @@ before it, the exit-code scheme was a convention that happened to hold.
 |------|---------|
 | `0` | Ran; the verdict is **positive** (valid / clean / pass / hit). |
 | `1` | Ran; the verdict is **negative** (invalid / dirty / fail / miss / refused). **This is a result, not a crash** — stdout still holds valid JSON. |
-| `2` | **Usage error**: missing or invalid arguments, an unreadable input path. |
+| `2` | **Usage error**: missing or invalid arguments — including a path that does not exist or is not a file. |
 | `3` | **Internal error**: I/O failure, an unreachable service, an unexpected exception. |
+
+**Where the boundary between `2` and `3` actually falls.** A path the caller named that
+is *absent or not a file* is always `2` — the argument itself was wrong. An `OSError`
+raised while reading a file that *does* exist (a permission bit, a bad encoding, a device
+error) is **not uniform across the thirteen**: `compact_spec` and `read_scoped` report it
+as `3`, while `apply_live`, `calibrate` and `compute_stability` report it as `2`. Treat
+"existing file that would not read" as **either** `2` or `3` and route on the payload, not
+the code. Both still emit the standard envelope with `ok: false`, so nothing is
+ambiguous except which of the two error classes it lands in. Making this uniform is
+**G-026**; it is called out here rather than smoothed over because a contract that hides a
+known inconsistency is worse than one that names it.
 
 The 0/1 split is the one worth being careful about. A cache miss, a dirty gate, a failing
 test and an out-of-scope read are all *expected* outcomes of a working system, and the

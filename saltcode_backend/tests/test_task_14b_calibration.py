@@ -550,3 +550,110 @@ def test_entrypoint_help_exits_zero() -> None:
     )
     assert completed.returncode == EXIT_OK
     assert "--set" in completed.stdout
+
+
+# ------------------------------------------------- PR #2 round 5: artifact integrity
+
+
+def test_an_empty_distribution_has_the_same_keys_as_a_populated_one() -> None:
+    """The summary is persisted, so two shapes would mean two reader paths.
+
+    A missing key and a null one are different failures to whatever consumes the
+    artifact; only one of them is honest about "no samples".
+    """
+    assert set(distribution([])) == set(distribution([0.1, 0.9]))
+    assert distribution([])["median"] is None
+
+
+def test_a_repeated_auditor_id_is_refused_rather_than_silently_dropped() -> None:
+    """`scores` is keyed by id while `n_samples` counts records — see `_ids_are_unique`.
+
+    Without the validator the set below measures two samples, keeps one score, and
+    reports a threshold chosen from a corpus smaller than the operator supplied.
+    """
+    with pytest.raises(ValueError, match="repeats these ids"):
+        CalibrationSet(auditor=[sample("dup"), sample("dup", expected="impl_fail")])
+
+
+def test_a_repeated_semantic_id_is_refused_too() -> None:
+    pair = SemanticPair(id="dup", goal_a="a", goal_b="b", scope_a=["x.py"], scope_b=["x.py"], match=True)
+    other = SemanticPair(id="dup", goal_a="c", goal_b="d", scope_a=["y.py"], scope_b=["y.py"], match=False)
+    with pytest.raises(ValueError, match="repeats these ids"):
+        CalibrationSet(semantic=[pair, other])
+
+
+def test_distinct_ids_are_accepted() -> None:
+    """The validator must not reject an ordinary set — the negative case needs a positive."""
+    built = CalibrationSet(auditor=[sample("a"), sample("b")])
+    assert [s.id for s in built.auditor] == ["a", "b"]
+
+
+def test_thresholds_json_is_replaced_atomically(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An interrupted write must leave the previous calibration readable.
+
+    `load_thresholds` runs on every tool invocation and falls back to the conservative
+    defaults on a malformed file *silently*, so a truncating write that dies partway
+    would un-calibrate every threshold with no error anywhere. This drives the failure
+    at `os.replace` — after the temp file is written, which is the only window a
+    non-atomic write would expose.
+    """
+    first = build_artifact(None, None, set_name="first.json")
+    first["thresholds"] = {AUDITOR_STABILITY: {"value": 0.42, "calibrated": True}}
+    written = write_artifact(tmp_path, first)
+    before = written.read_text(encoding="utf-8")
+
+    import saltcode.stability.calibrate as calibrate_module
+
+    def boom(src: str, dst: str) -> None:
+        raise OSError("interrupted between staging and replace")
+
+    monkeypatch.setattr(calibrate_module.os, "replace", boom)
+
+    second = build_artifact(None, None, set_name="second.json")
+    with pytest.raises(OSError, match="interrupted"):
+        write_artifact(tmp_path, second)
+
+    # The live file is untouched, not truncated.
+    assert written.read_text(encoding="utf-8") == before
+    assert json.loads(written.read_text(encoding="utf-8"))["thresholds"][AUDITOR_STABILITY]["value"] == 0.42
+    # And no staging file was left behind for the next reader to trip over.
+    assert not list(written.parent.glob(".thresholds-*.tmp"))
+
+
+def test_a_failed_semantic_half_records_no_embedding_identity(tmp_path: Path) -> None:
+    """The artifact must not name an embedding no measured threshold depends on.
+
+    `want_semantic` stays true when `calibrate_semantic` raises and only appends to
+    `problems`, so gating on intent rather than result would stamp the artifact with a
+    model identity REQ-CAL-001 AC4's "re-run when the embedding changes" check would
+    then compare against nothing.
+    """
+    from saltcode.tools.calibrate import run as run_entry
+
+    path = write_set(
+        tmp_path,
+        {
+            "auditor": [
+                {"id": "a", "diff": DIFF, "expected_verdict": "pass"},
+                {"id": "b", "diff": DIFF, "expected_verdict": "pass"},
+            ],
+            # One pair is under MIN_SAMPLES, so the semantic half cannot be measured.
+            "semantic": [
+                {"id": "p1", "goal_a": "add login", "goal_b": "add sign-in",
+                 "scope_a": ["auth.py"], "scope_b": ["auth.py"], "match": True}
+            ],
+        },
+    )
+    code = run_entry(
+        ["--repo", str(tmp_path), "--set", str(path)],
+        client=VerdictClient({"a": ["pass"] * 3, "b": ["pass", "impl_fail", "pass"]}),
+        embedding_client=AxisEmbedding({"add login": [1.0, 0.0, 0.0], "add sign-in": [1.0, 0.0, 0.0]}),
+    )
+    assert code == EXIT_OK
+
+    artifact = json.loads(
+        (tmp_path / ".saltcode" / "calibration" / "thresholds.json").read_text(encoding="utf-8")
+    )
+    assert artifact["embedding_model"] is None, "an unmeasured semantic half named an embedding"
+    # The auditor half still landed, so this is the partial state, not a total failure.
+    assert AUDITOR_STABILITY in artifact["thresholds"]

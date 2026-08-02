@@ -121,7 +121,7 @@ disagree, and it changes how every definition is authored.
 `skills:` resolves each named skill and passes it to `buildSkillInjection`
 (`src/agents/skills.ts:671-690`), which appends to the system prompt:
 
-```
+```text
 The following configured skills are available to this subagent.
 Use the read tool to load a skill's file when the task matches its description.
 ...

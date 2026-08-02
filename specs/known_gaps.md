@@ -472,6 +472,31 @@ ever been completed on any of them. That is now done and written down in `COOKBO
 Two further skills (`agent-evaluation`, `ai-agents-architect`) exist locally but are not
 in design §17 and are not adopted.
 
+### - [ ] G-026 — The thirteen entrypoints disagree on the exit code for an unreadable file
+**Severity:** LOW · **Noticed:** Task 7b (PR #2 review round 5) · **Closed by:**
+unassigned · **Where:** `saltcode/tools/{compact_spec,read_scoped}.py` vs
+`{apply_live,calibrate,compute_stability}.py`, `docs/entrypoints.md`
+
+A path that is *absent or not a file* is `2` everywhere — that part is uniform. But an
+`OSError` raised while reading a file that **does** exist splits the roster:
+`compact_spec` and `read_scoped` report `3`; `apply_live`, `calibrate` and
+`compute_stability` report `2`.
+
+Both readings are defensible, which is why it drifted. `read_scoped` is arguably right at
+`3` — the path came from the broker, not from a caller's typo, so a failure there really
+is environmental. `apply_live` is arguably right at `2` — its `--in` is a caller-supplied
+argument like any other.
+
+*Why it matters:* less than it looks, because both paths emit the standard envelope with
+`ok: false` and a `detail`, so nothing is lost — only the error *class* differs. It is
+recorded because **the Task 7b conformance suite should have caught this and did not**:
+its probe is an unknown flag, which exercises parse → fail → emit → exit uniformly, and
+nothing in it opens an existing-but-unreadable file. `docs/entrypoints.md` now states the
+divergence rather than implying a uniformity that does not hold. The fix is to pick one
+rule, apply it to all five, and add the missing conformance probe — but the entrypoints
+belong to Tasks 9/10/12/14b, so Task 7b reports it rather than editing them
+(`.claude/rules/stop-and-ask.md`).
+
 ### - [ ] G-008 — `skills/` is an empty placeholder
 **Severity:** MED · **Noticed:** Task 0.2 · **Closed by:** Task 7.1c ·
 **Where:** `skills/`

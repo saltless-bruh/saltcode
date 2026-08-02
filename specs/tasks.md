@@ -154,6 +154,34 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 
 - **Review follow-ups (PR #2 round 4, 2026-07-31).** Six actionable findings against Tasks 5/9/10/12 plus ten nitpicks; four of the six were confirmed real, one was confirmed *not* real, and one was a convention misread. (a) **The `tests/**` path check was case-sensitive.** On a case-insensitive filesystem — macOS APFS, Windows NTFS — a diff naming `Tests/task_T1_spec.py` clears the check and `git apply` then writes the existing `tests/task_T1_spec.py`, defeating REQ-BLD-003 on exactly the machine `apply_live` exists to protect. Now one `re.IGNORECASE` pattern, which also subsumes the two narrower ones (`blocked_paths` matches with `search`, so `(?:^|/)tests/` already covered both). (b) **`_STRING_LITERAL_RE` backtracked exponentially.** Its `\\.` and `(?!\1).` branches both match a backslash, so an unterminated literal containing a run of escapes makes the engine explore every partition of that run — **measured** at 0.0007s → 0.0047s → 0.0323s for 14 → 18 → 22 backslashes, and the input is a model-produced diff. Excluding the backslash from the second branch makes them disjoint; verified equivalent on normal input. (c) **`audit_result.detail` could contradict its own `reason`** — `passes[0].detail` was used unconditionally, so `[impl_fail, pass, pass]` paired a `pass` reason with the `impl_fail` pass's sentence. Now the first pass whose verdict *is* the majority. (d) **A timed-out `git apply` was not audit-logged** though it had run and may have written part of the patch (REQ-SEC-003); now recorded with `exit_code: null` and a timeout reason. (e) **A mis-encoded evidence file escaped `run()`**: `UnicodeDecodeError` is a `ValueError`, not an `OSError`, and `run(argv, client=...)` is a documented in-process entrypoint contracted to return an exit code. **Not acted on:** the suggestion to wrap `load_thresholds` in a handler — tested against a directory-in-place-of-file, malformed JSON, wrong types, a null section and a list root, and it absorbs all five and falls back to defaults, so the handler would guard nothing. The review also read G-020/G-021's `**Closed by:**` line as a claim they were already closed; that field names the *future* closer throughout this file (cf. G-006, G-007, G-009), but the wording was vaguer than a task id, so it now says so explicitly. Nitpicks taken: a distinctness ceiling in `build_conditions` (the conditions stop being distinct above **10** passes, not 6 as the review computed — the (temperature, order) *pair* survives longer than either axis; `--passes 11` now raises rather than silently reporting `conditions_distinct: false`), deterministic tie-breaking in the literal ordering (a set plus randomised string hashing made `detail` irreproducible across runs), a hoisted import, and five test cleanups. 6 new tests.
 
+- **Review follow-ups (PR #2 round 5, 2026-08-02).** Four actionable findings plus three
+  nitpicks; six were real and one was not. (a) **`thresholds.json` was written
+  non-atomically** — `write_text` truncates, and `load_thresholds` reads that file on
+  *every* tool invocation and falls back to the conservative defaults on a malformed one
+  **silently**, so an interrupted write would un-calibrate every threshold with no error
+  anywhere. Now staged to a sibling temp file, `fsync`ed and `os.replace`d, matching what
+  Task 12's compactor already did. (b) **A duplicate id in a calibration set silently
+  shrank the corpus** — `scores`/`verdicts` (and `match_cosines`/`pcd_values`) are keyed
+  by `id` while `n_samples` and the distributions count *records*, so a repeat overwrote
+  one measurement while still counting both, and the thresholds were then chosen from a
+  smaller sample than the operator supplied. A `CalibrationSet` validator now refuses the
+  set. (c) **`embedding_model` was recorded when the semantic half had failed** —
+  `want_semantic` stays true after `calibrate_semantic` raises into `problems`, so the
+  artifact named an embedding no measured bar depended on, giving REQ-CAL-001 AC4's
+  "re-run when the embedding changes" check nothing real to compare. Gated on the result.
+  (d) **`distribution([])` omitted `median`**, so the persisted artifact had two shapes.
+  (e) **`CLAUDE.md` claimed Tasks 0–5 done while also saying Task 4's box is unticked** —
+  a genuine self-contradiction in my own summary; Task 4 is now stated as built with one
+  open leg. (f) Two markdown fences lacked a language. **Not acted on as suggested:** the
+  reviewer asked to weaken `docs/entrypoints.md` so exit `2` excludes unreadable files.
+  Checked all thirteen: the disagreement is *between entrypoints*, not between doc and
+  code — `compact_spec` and `read_scoped` say `3`, `apply_live`, `calibrate` and
+  `compute_stability` say `2`. Both readings are defensible, the entrypoints belong to
+  other tasks, so the doc now names the divergence and **G-026** records it rather than
+  papering over it. Also checked and found **not** an issue: `_embedding_model_name(None)`
+  already returns exactly what `LocalEmbeddingClient()` uses, since the client sets
+  `model_name = model_name or settings.embedding_model`. 6 new tests.
+
 ## Task 7b — Backend CLI entrypoints consolidation  ·  deps: 1,2,3,5,9,10,12,14b  ·  [NEW]
 - [x] 7b.1 Ensure every capability has a standalone `saltcode.tools.<name>` module runnable as `python -m saltcode.tools.<name> [args]`, with a stable JSON-on-stdout contract and exit codes: `validate_contract`, `diff_check`, `scope_probe`, `cache_lookup`, `sandbox_apply`, `static_gate`, `test_run`, `compute_stability`, `apply_live`, `compact_spec`, `calibrate`, `read_scoped`, `connectivity`.
 - [x] 7b.2 Document each entrypoint's args + output schema (the extension's tool definitions depend on these contracts).

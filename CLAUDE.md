@@ -77,13 +77,15 @@ workspace/         # target projects Saltcode operates on
 
 ## Build state (2026-07-31)
 
-- **Track A is complete.** v9 **Tasks 0–5, 9, 10, 12, 14b, 7b** are done and ticked.
+- **Track A is built out, with one leg still open.** v9 **Tasks 0–3, 5, 9, 10, 12, 14b,
+  7b** are done and ticked. **Task 4 is not** — its box stays unticked because 4.6 is
+  deferred to Task 20.1 (see G-011), so Track A carries one open integration leg.
   Task 0 (Pi Package scaffold, two-lane CI, verified on Pi 0.82.1) · Task 1 (typed
   contracts + Output-Length Enforcer) · Task 2 (Saltnitor client, local embeddings,
   connectivity probe, the source-payload privacy guard) · Task 3 (disposable sandbox +
   bubblewrap container, command allowlist, audit log, scope probe) · Task 4 (LSP/AST MCP
-  server + scoped-read broker — **box still unticked**, 4.6 deferred to Task 20.1, see
-  G-011) · Task 5 (LanceDB caches, PCD semantic tier, frozen notes, per-threshold
+  server + scoped-read broker — built, **box still unticked**, 4.6 deferred to Task 20.1,
+  see G-011) · Task 5 (LanceDB caches, PCD semantic tier, frozen notes, per-threshold
   calibration flags) · Task 9 (static gate, task-spec runner, diff validator) · Task 10
   (N-pass Auditor stability, anti-gaming heuristics, `apply_live`, scoped read) ·
   Task 12 (Spec Compactor) · Task 14b (measured-then-fixed threshold calibration) ·

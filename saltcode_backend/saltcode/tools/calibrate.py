@@ -206,7 +206,12 @@ def run(
         semantic,
         set_name=set_path.name,
         judgment_model=args.model,
-        embedding_model=_embedding_model_name(embedding_client) if want_semantic else None,
+        # Gated on the *result*, not on the intent. `want_semantic` stays true when
+        # `calibrate_semantic` raised and only appended to `problems`, and recording an
+        # embedding identity that no measured bar depends on would give REQ-CAL-001 AC4's
+        # "re-run when the embedding changes" check something to compare that means
+        # nothing.
+        embedding_model=_embedding_model_name(embedding_client) if semantic is not None else None,
     )
 
     written_to: str | None = None

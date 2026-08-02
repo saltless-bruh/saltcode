@@ -27,13 +27,17 @@ otherwise is the one outcome that would make the flag worthless.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import tempfile
+from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from saltcode.memory.semantic_cache import get_semantic_query
 from saltcode.providers.embeddings import EmbeddingClient
@@ -120,6 +124,31 @@ class CalibrationSet(BaseModel):
     auditor: list[AuditorSample] = Field(default_factory=list[AuditorSample])
     semantic: list[SemanticPair] = Field(default_factory=list[SemanticPair])
 
+    @model_validator(mode="after")
+    def _ids_are_unique(self) -> CalibrationSet:
+        """Reject a repeated id, in either section, before anything is measured.
+
+        Both calibration routines key their per-sample evidence by `id` while counting
+        and binning per *record*. A duplicate id therefore silently overwrites the
+        earlier entry in `scores`/`verdicts` (or `match_cosines`/`pcd_values`) while
+        `n_samples` and the distribution still count both — so the artifact reports more
+        samples than it has scores, and the thresholds are chosen from a corpus quietly
+        smaller than the one the operator supplied. Refusing the set is the only honest
+        outcome: silently dropping a labelled sample corrupts the measurement that the
+        whole measured-then-fixed protocol exists to make trustworthy.
+        """
+        for label, ids in (
+            ("auditor", [s.id for s in self.auditor]),
+            ("semantic", [p.id for p in self.semantic]),
+        ):
+            duplicates = sorted(i for i, n in Counter(ids).items() if n > 1)
+            if duplicates:
+                raise ValueError(
+                    f"the {label} section repeats these ids, so their measurements would "
+                    f"overwrite one another: {', '.join(duplicates)}"
+                )
+        return self
+
 
 def distribution(values: Sequence[float], bins: int = 10) -> dict[str, Any]:
     """A JSON-safe summary of a score distribution (REQ-CAL-001 AC3, REQ-AUD-005 AC3).
@@ -131,7 +160,10 @@ def distribution(values: Sequence[float], bins: int = 10) -> dict[str, Any]:
     `specs/tasks.md`.
     """
     if not values:
-        return {"count": 0, "bins": [], "min": None, "max": None, "mean": None}
+        # Every key the populated branch emits, so a reader of the persisted artifact
+        # handles one shape rather than two. A missing key and a null one are different
+        # failures to whatever consumes this, and only one of them is honest here.
+        return {"count": 0, "bins": [], "min": None, "max": None, "mean": None, "median": None}
 
     ordered = sorted(values)
     lo, hi = ordered[0], ordered[-1]
@@ -473,5 +505,27 @@ def write_artifact(workspace_path: Path | str, artifact: dict[str, Any]) -> Path
 
     (directory / f"thresholds-{stamp}.json").write_text(body, encoding="utf-8")
     current = directory / CALIBRATION_FILE
-    current.write_text(body, encoding="utf-8")
+
+    # Atomic, for the same reason `contracts/spec_compactor` writes atomically: a
+    # truncating in-place write leaves a window in which `thresholds.json` is empty or
+    # half-written, and `load_thresholds` runs on *every* tool invocation. Its failure
+    # mode is silent — a malformed file falls back to the conservative defaults, so an
+    # interrupted write would quietly un-calibrate every threshold rather than raise.
+    staged: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", dir=directory, prefix=".thresholds-", suffix=".tmp", delete=False, encoding="utf-8"
+        ) as handle:
+            staged = handle.name
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staged, current)
+    except OSError:
+        # `staged` stays None when opening the temp file itself failed (a read-only
+        # directory), so cleanup must not assume it was assigned.
+        if staged is not None:
+            with contextlib.suppress(OSError):
+                Path(staged).unlink()
+        raise
     return current
