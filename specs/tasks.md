@@ -230,7 +230,7 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
   10. **Determinism** — for JSON-emitting agents, thinking `off` and an instruction to emit the artifact and nothing else.
 - [ ] 7.3 Verify each agent's behavior matches its contract in an isolated spawn (Scout AST-only; Architect HARD CONSTRAINTS carry-through; Planner design.md-only; Test Intent project-config + framework; Evaluator four checks; Builder scoped/one-task).
 - [ ] 7.3b **Adversarial contract check.** For each agent, attempt the one thing its contract forbids and confirm the attempt fails: Scout asked for a file body; Architect asked to emit tasks; Planner handed `context_report.json`; Test Intent asked to write implementation code; Builder asked to edit `tests/**` and to read outside `files_affected`. A definition that merely *says* "do not" without a mechanism blocking it is a finding, not a pass.
-- [ ] 7.4 Author the 3 new skills (SKILL.md, valid `name`/`description`): `saltcode-lsp-usage` (symbols/outline before bodies, stay in `files_affected`, never emit raw source — preload for Scout + Builder), `saltcode-delegation` (agent selection, serial-when-dependent, complete zero-context task prompts), `saltcode-checkpoint-ops` (`/checkpoints`, `/rollback`, reading regression failures).
+- [x] 7.4 Author the 3 new skills (SKILL.md, valid `name`/`description`): `saltcode-lsp-usage` (symbols/outline before bodies, stay in `files_affected`, never emit raw source — preload for Scout + Builder), `saltcode-delegation` (agent selection, serial-when-dependent, complete zero-context task prompts), `saltcode-checkpoint-ops` (`/checkpoints`, `/rollback`, reading regression failures).
 - **Satisfies:** REQ-SCT/ARC/PLN/TST/EVL/BLD/AUD (behavioral), REQ-EXT-003, REQ-EXT-012, REQ-EXT-015 (dependency contract), REQ-EXT-016, REQ-SEC-006 (trust review of adopted skills).
 - **Done when:** all 14 base skills + 3 new skills load, and the package's **Skills are visible in `pi config`** under the project package (inherited from Task 0's gate, which cannot assert this because `skills/` is empty until 7.1c fills it); every adopted third-party skill has its source, licence and trust review recorded in `COOKBOOKS.md`; each of the 6 sub-agent definitions spawns in an isolated context with its skill present in-prompt even when it lacks `read`, producing the expected behavior on the fixture repo with only its allowed tools; **every definition satisfies all ten points of the 7.2b quality bar, and every forbidden action in 7.3b is demonstrably blocked**; the routing table resolves a model + thinking level for every (agent, state).
 
@@ -299,6 +299,9 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
   > confirmed for skills as well as agents, and it means **Task 7's "visible in `pi config`"
   > leg cannot pass from a bare working copy** — it needs `pi install` or a `node_modules`
   > link first. Recorded in G-024; not worked around.
+  > **Corrected 2026-08-02 (7.4): that conclusion was wrong.** `pi install -l .` is Task 0's
+  > own documented step and it works; I had drawn a conclusion from `pi config -l` on an
+  > unregistered tree without ever running the install. See the correction in G-024.
 
 - **7.2 done (2026-08-02); 7.2b's ten points are asserted, not asserted-to.** Six
   definitions in `agents/` — Scout, Architect, Planner, Test Intent, Evaluator, Builder.
@@ -329,8 +332,29 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
   > recovery from "spec not found" is to proceed without it, which hollows out the
   > task-spec gate while everything upstream stays green. It is a 7.1 asset, so 7.2
   > reports it.
-  > **Still open on this task:** 7.1c (blocked, G-025), 7.3 and 7.3b (need `pi install` or
-  > a `node_modules` link — G-024), 7.4.
+  > **Still open on this task:** 7.1c (blocked, G-025), 7.3 and 7.3b.
+
+- **7.4 done (2026-08-02), and the "visible in `pi config`" leg is verified.**
+  `saltcode-lsp-usage`, `saltcode-delegation`, `saltcode-checkpoint-ops` under `skills/`,
+  each covering exactly what REQ-EXT-016 AC2/AC3 names. **AC2's "preloaded for Scout and
+  Builder" needed a mechanism change:** `skill-source` is now comma-separated, so a
+  definition can carry its own agent skill *and* `lsp-usage`. A test asserts the rendered
+  prompt of each — present in Scout and Builder, absent from the other four — because the
+  requirement is about what reaches the agent's prompt, which is precisely what fails
+  silently. `lsp-usage` states the Scout/Builder asymmetry explicitly, since one shared
+  skill that mentioned only the Builder's permission would read to Scout as licence to
+  read bodies.
+  > **Verified against a real `pi`:** `pi install -l . --approve` then `pi config -l`
+  > lists the project package with its extension and **all eleven `saltcode-*` skills**,
+  > the three new ones included (REQ-EXT-016 AC4). This is the leg G-C10 relocated out of
+  > Task 0 and the one my earlier note wrongly called unreachable.
+  > `checkpoint-ops` carries the piece most likely to be got wrong in practice: a
+  > regression failure **outside** `task.files_affected` is FLAG HUMAN and never
+  > auto-fixed — it is the Trade-B signal, and handing it to a Builder replaces a precise
+  > finding with a guess from the one agent that can only see one task.
+  > **Still open on Task 7:** 7.1c (blocked, G-025) and 7.3/7.3b (need `pi-subagents`
+  > adopted — a REQ-SEC-006 trust decision, and the only remaining consumer of the
+  > `pi.subagents.agents` key).
 
 ## Task 6 — Prefix assembly in `before_agent_start`  ·  deps: 5, 7, 13  ·  [CHANGED]
 - [ ] 6.1 In `before_agent_start`, assemble `[system(active agent) | design.md | frozen notes | per-call delta]`; return `{ systemPrompt, message }`. Read `event.systemPromptOptions` to respect user config. Pull frozen notes + design.md from the backend/Code-Wiki.

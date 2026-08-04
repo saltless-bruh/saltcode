@@ -144,9 +144,12 @@ def test_each_definition_replaces_the_prompt_and_inherits_nothing(name: str) -> 
 
 @pytest.mark.parametrize("name", AGENTS)
 def test_each_definition_declares_its_skill_source(name: str) -> None:
-    source = frontmatter(name).get("skill-source", "")
-    assert source.startswith("skills/saltcode-")
-    assert (REPO_ROOT / source).is_file()
+    """`skill-source` is comma-separated: an agent may preload more than one skill."""
+    sources = [p.strip() for p in frontmatter(name).get("skill-source", "").split(",") if p.strip()]
+    assert sources, f"{name} declares no skill-source"
+    for source in sources:
+        assert source.startswith("skills/saltcode-"), source
+        assert (REPO_ROOT / source).is_file(), source
 
 
 # --------------------------------------------------------------- the hard boundaries
@@ -235,3 +238,69 @@ def test_every_skill_under_skills_has_valid_frontmatter() -> None:
         assert match is not None, f"{skill.parent.name}: no frontmatter"
         assert re.search(r"^name:\s*\S+", match.group("body"), re.M), skill.parent.name
         assert re.search(r"^description:\s*\S+", match.group("body"), re.M), skill.parent.name
+
+
+# ------------------------------------------------------- task 7.4: the three new skills
+
+
+NEW_SKILLS: tuple[str, ...] = ("saltcode-lsp-usage", "saltcode-delegation", "saltcode-checkpoint-ops")
+"""REQ-EXT-016's three extension-targeting skills, named in the requirement itself."""
+
+
+@pytest.mark.parametrize("name", NEW_SKILLS)
+def test_the_three_new_skills_exist_and_are_loadable(name: str) -> None:
+    """REQ-EXT-016 AC4: valid per Pi's Agent Skills standard."""
+    skill = SKILLS_DIR / name / "SKILL.md"
+    assert skill.is_file(), f"{name} is missing"
+    match = _FRONTMATTER_RE.match(skill.read_text(encoding="utf-8"))
+    assert match is not None
+    assert re.search(rf"^name:\s*{re.escape(name)}$", match.group("body"), re.M)
+    assert re.search(r"^description:\s*\S", match.group("body"), re.M)
+
+
+def test_lsp_usage_is_preloaded_for_scout_and_builder_only() -> None:
+    """REQ-EXT-016 AC2 names those two specifically.
+
+    Asserted on the *rendered* definition rather than on frontmatter, because the
+    requirement is that the skill is present in the agent's prompt — which is the thing
+    that would silently not happen.
+    """
+    marker = "# Using the LSP/AST tools"
+    for name in ("scout", "builder"):
+        assert marker in body(name), f"{name} lacks the preloaded lsp-usage skill"
+    for name in set(AGENTS) - {"scout", "builder"}:
+        assert marker not in body(name), f"{name} carries lsp-usage but AC2 does not name it"
+
+
+def test_an_agent_can_preload_more_than_one_skill() -> None:
+    """Scout must carry both its own contract and lsp-usage, not one at the cost of the other."""
+    text = body("scout")
+    assert "# Saltcode Scout Skill" in text
+    assert "# Using the LSP/AST tools" in text
+
+
+def test_lsp_usage_states_the_scout_builder_asymmetry() -> None:
+    """The two agents share the skill but not the rule, so the skill must say which is which.
+
+    A shared skill that stated only the Builder's permission would read, to Scout, as
+    licence to read bodies — the exact failure REQ-SCT-001 exists to prevent.
+    """
+    text = (SKILLS_DIR / "saltcode-lsp-usage" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Scout: you have no body-reading tool at all" in text
+    assert "task.files_affected" in text
+    assert "Never emit raw source" in text
+
+
+def test_delegation_names_the_auditor_as_not_a_subagent() -> None:
+    """The single most likely misreading of the roster (design §5.6a)."""
+    text = (SKILLS_DIR / "saltcode-delegation" / "SKILL.md").read_text(encoding="utf-8")
+    assert "The Auditor is not on this list" in text
+    assert "saltcode_stability" in text
+
+
+def test_checkpoint_ops_forbids_auto_fixing_an_out_of_scope_regression() -> None:
+    """REQ-FAIL-004 / Trade B: the one place the correct action is the non-obvious one."""
+    text = (SKILLS_DIR / "saltcode-checkpoint-ops" / "SKILL.md").read_text(encoding="utf-8")
+    assert "FLAG HUMAN. Never auto-fix" in text
+    assert "/rollback" in text and "/checkpoints" in text
+    assert "auto_push" in text, "pushing must be stated as non-automatic"

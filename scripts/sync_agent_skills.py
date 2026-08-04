@@ -38,7 +38,7 @@ BEGIN = "<!-- BEGIN SKILL: {source} — generated, do not edit between markers -
 END = "<!-- END SKILL -->"
 
 _FRONTMATTER_RE = re.compile(r"\A---\n(?P<body>.*?)\n---\n", re.DOTALL)
-_SOURCE_RE = re.compile(r"^skill-source:\s*(?P<path>\S+)\s*$", re.MULTILINE)
+_SOURCE_RE = re.compile(r"^skill-source:\s*(?P<paths>.+?)\s*$", re.MULTILINE)
 _BLOCK_RE = re.compile(
     r"<!-- BEGIN SKILL:.*?-->\n(?P<content>.*?)(?P<end>\n?)<!-- END SKILL -->",
     re.DOTALL,
@@ -73,24 +73,32 @@ def sync_one(agent_path: Path, *, check: bool) -> bool:
     if source is None:
         raise SyncError(f"{agent_path.name}: no `skill-source:` key, so its skill cannot be inlined")
 
-    skill_path = REPO_ROOT / source.group("path")
-    if not skill_path.is_file():
-        raise SyncError(f"{agent_path.name}: skill-source {source.group('path')} does not exist")
+    # Comma-separated, matching how `pi-subagents` parses its own list fields. An agent can
+    # need more than one skill: REQ-EXT-016 AC2 preloads `saltcode-lsp-usage` for Scout and
+    # Builder *alongside* each one's own agent skill.
+    sources = [p.strip() for p in source.group("paths").split(",") if p.strip()]
+    if not sources:
+        raise SyncError(f"{agent_path.name}: `skill-source:` is empty")
+
+    bodies: list[str] = []
+    for rel in sources:
+        skill_path = REPO_ROOT / rel
+        if not skill_path.is_file():
+            raise SyncError(f"{agent_path.name}: skill-source {rel} does not exist")
+        bodies.append(skill_body(skill_path))
 
     block = _BLOCK_RE.search(text)
     if block is None:
         raise SyncError(f"{agent_path.name}: no BEGIN/END SKILL marker block to splice into")
 
-    wanted = skill_body(skill_path)
+    wanted = "\n\n".join(bodies)
     if block.group("content").strip() == wanted:
         return True
 
     if check:
         return False
 
-    replacement = (
-        BEGIN.format(source=source.group("path")) + "\n" + wanted + "\n" + END
-    )
+    replacement = BEGIN.format(source=", ".join(sources)) + "\n" + wanted + "\n" + END
     agent_path.write_text(text[: block.start()] + replacement + text[block.end() :], encoding="utf-8")
     return False
 

@@ -447,11 +447,24 @@ lists the 13 skills under `.agents/skills/`. The four skills authored into the r
 when Saltcode is installed under `node_modules`, and a working copy is not.
 
 So the same split applies to all three resource kinds: `skills/`, `prompts/` and
-`agents/` are correct **for the shipped package** and invisible **to the working copy**,
-which sees `.agents/` instead. That is not a defect in the layout — design §17's tree is
-right for what ships — but it means **Task 7's "Skills are visible in `pi config`"
-Done-when leg cannot pass from a bare working copy**. It needs `pi install` (or a link
-into `node_modules`) first, and that step is currently written down nowhere.
+`agents/` are correct **for the shipped package** and are invisible to a working copy that
+has not been registered, which sees `.agents/` instead.
+
+**Corrected 2026-08-02 (Task 7.4).** The sentence that stood here — that Task 7's
+"Skills are visible in `pi config`" leg *"cannot pass from a bare working copy"* — was
+**wrong, and the error was mine**. The step is not "written down nowhere": it is Task 0's
+own Done-when and verification, `pi install -l .`, recorded on 2026-07-28. I had never run
+it; I ran `pi config -l` against an unregistered tree and drew a conclusion from the wrong
+command. Running `pi install -l . --approve` (the `--approve` is REQ-SEC-006 AC1's trust
+check working as specified) and re-checking shows the project package with its extension
+and **all eleven `saltcode-*` skills** listed. `.pi/` is gitignored, so registering leaves
+the tree clean.
+
+What survives of this gap is only the narrow, true part: a repo-root `agents/` is read by
+no *default* discovery path, so the `pi.subagents.agents` declaration added in 7.2 is
+load-bearing. That half is unverified — `pi-subagents` is not installed (REQ-SEC-006 trust
+review outstanding), so nothing has yet read that key. The skills half is now verified and
+closed.
 
 ### - [ ] G-025 — Two of design §17's six cookbooks cannot be shipped as they stand
 **Severity:** MED · **Noticed:** Task 7.1 · **Closed by:** Task 7.1c (needs a maintainer
