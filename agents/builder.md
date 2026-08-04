@@ -88,7 +88,7 @@ Use this when implementing a single task in Phase 2 of the Saltcode workflow.
 ## Context Reconstruction (mandatory on every task)
 
 1. Read the current task object from `.saltcode/tasks.json`.
-2. Read the task's spec file: `.saltcode/tests/task_{id}_spec.*`.
+2. Read the task's spec file: `tests/task_{id}_spec.*`.
 3. Use LSP tools (`outline`, `where_is`, `find_references`) for symbol context.
 4. Read the full body of files listed in `task.files_affected` ONLY.
 5. **Do NOT read**: `design.md`, sibling tasks, `context_report.json`, files not in `files_affected`.

@@ -383,9 +383,18 @@ neighbourhood that is not really dense. Quartiles are also a poor fit for a smal
 calibration set, where they are dominated by a handful of values. The fix is a sentence
 in REQ-CACHE-003 or design §11.9 naming the estimator, not a code change.
 
-### - [ ] G-023 — DD-16's "preload the skill into the sub-agent prompt" is not a feature that exists
-**Severity:** HIGH · **Noticed:** Task 7.0 · **Closed by:** Task 7.2 (blocked on a
-maintainer decision) · **Where:** `specs/design.md` DD-16 and §5.9, `specs/tasks.md`
+### - [x] G-023 — DD-16's "preload the skill into the sub-agent prompt" is not a feature that exists
+**Severity:** HIGH · **Noticed:** Task 7.0 · **Closed by:** Task 7.2 · **Closed:** 2026-08-02
+
+**Resolution (maintainer, 2026-08-02): inline the skill into the agent body.** The
+definition body becomes the child system prompt verbatim under `systemPromptMode: replace`,
+so the skill is present with no tool call and no `read` — DD-16's intent by construction
+rather than by an extension feature that does not exist. `skills/saltcode-*/SKILL.md`
+remains the single hand-authored source; `scripts/sync_agent_skills.py` splices it between
+markers and `--check` fails on drift, guarded by a test that hand-edits a block and asserts
+the guard catches it. Verified across all six definitions.
+
+*Original entry:* · **Where:** `specs/design.md` DD-16 and §5.9, `specs/tasks.md`
 task 7.2, `docs/subagent_contract.md` §4
 
 Design DD-16 says each agent's skill is "**preloaded** into its sub-agent system prompt
@@ -466,10 +475,31 @@ load-bearing. That half is unverified — `pi-subagents` is not installed (REQ-S
 review outstanding), so nothing has yet read that key. The skills half is now verified and
 closed.
 
-### - [ ] G-025 — Two of design §17's six cookbooks cannot be shipped as they stand
-**Severity:** MED · **Noticed:** Task 7.1 · **Closed by:** Task 7.1c (needs a maintainer
-view) · **Where:** `COOKBOOKS.md`, `.agents/skills/git-pushing/`,
-`.agents/skills/python-pro/`, `specs/design.md` §17
+### - [x] G-025 — Two of design §17's six cookbooks cannot be shipped as they stand
+**Severity:** MED · **Noticed:** Task 7.1 · **Closed by:** Task 7.1c ·
+**Closed:** 2026-08-02 · **Where:** `COOKBOOKS.md`, `skills/git-pushing/`,
+`skills/python-pro/`, `specs/design.md` §17
+
+**Resolution (maintainer, 2026-08-02).** Both ship, neither as-is-and-unexamined.
+`git-pushing` is adopted **with `scripts/` removed** — the commit-message guidance is worth
+keeping and the script was the entire hazard. Its body was rewritten so it no longer
+invokes the deleted file (a dangling `bash …/smart_commit.sh` fails at the point of use
+with no explanation, which is worse than the script) and now states *why* the steps are
+explicit: `auto_push` and the uncommitted-until-regression boundary are project rules a
+one-shot script cannot express. `python-pro` ships with its licence recorded in
+`COOKBOOKS.md` as **undetermined** rather than assumed — it is prose-only, benign, and not
+redistributed beyond this repo, and the honest record is what lets a later licensing
+decision see exactly what is and is not known.
+
+**Verified:** `pi install -l . --approve` then `pi config -l` renders **all 17** skills
+under the project package — 8 `saltcode-*` agent skills, the 3 new ones, and all 6
+cookbooks, which is design §17's set exactly. (The TUI viewport shows ~13 rows at a time,
+so this needed scrolling to several depths and taking the union; a single frame is not
+evidence of absence.)
+
+---
+
+*Original entry:*
 
 The 7.1 trust review found no malicious content in any of the eight third-party skills.
 It did find that two of the six cookbooks design §17 names cannot be adopted as-is, so
@@ -525,9 +555,17 @@ rule, apply it to all five, and add the missing conformance probe — but the en
 belong to Tasks 9/10/12/14b, so Task 7b reports it rather than editing them
 (`.claude/rules/stop-and-ask.md`).
 
-### - [ ] G-027 — The Builder skill sends the Builder to the wrong directory for its spec
-**Severity:** MED · **Noticed:** Task 7.2 · **Closed by:** unassigned (a one-line skill
-edit) · **Where:** `skills/saltcode-builder/SKILL.md` line 13,
+### - [x] G-027 — The Builder skill sends the Builder to the wrong directory for its spec
+**Severity:** MED · **Noticed:** Task 7.2 · **Closed:** 2026-08-02 ·
+
+**Fixed 2026-08-02** in both copies (`skills/` and `.agents/skills/`) and re-synced into
+the Builder's prompt. **The maintainer also set a standing rule:** when an older asset is
+inlined into a prompt authored by the current task, factual errors in it that *every*
+source document contradicts are fixed, not merely reported. `stop-and-ask.md`'s
+"adjacent breakage is reported" governs judgment calls and things merely noticed — not
+text the current change is knowingly shipping wrong.
+
+*Original entry:* · **Where:** `skills/saltcode-builder/SKILL.md` line 13,
 `.agents/skills/saltcode-builder/SKILL.md`
 
 The skill instructs: *"Read the task's spec file: `.saltcode/tests/task_{id}_spec.*`"*.

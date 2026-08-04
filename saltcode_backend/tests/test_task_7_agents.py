@@ -304,3 +304,53 @@ def test_checkpoint_ops_forbids_auto_fixing_an_out_of_scope_regression() -> None
     assert "FLAG HUMAN. Never auto-fix" in text
     assert "/rollback" in text and "/checkpoints" in text
     assert "auto_push" in text, "pushing must be stated as non-automatic"
+
+
+# ------------------------------------------------------- task 7.1c: the shipped roster
+
+
+DESIGN_17_SKILLS: frozenset[str] = frozenset({
+    # the 8 agent skills
+    "saltcode-scout", "saltcode-architect", "saltcode-planner", "saltcode-test-intent",
+    "saltcode-evaluator", "saltcode-builder", "saltcode-auditor", "saltcode-compactor",
+    # the 3 new extension-targeting skills (REQ-EXT-016)
+    "saltcode-lsp-usage", "saltcode-delegation", "saltcode-checkpoint-ops",
+    # the 6 community cookbooks
+    "python-pro", "mcp-builder", "test-driven-development",
+    "systematic-debugging", "agent-tool-builder", "git-pushing",
+})
+"""Design §17's shipped set, verbatim. Task 7's Done-when is "all 14 base skills + 3 new"."""
+
+
+def test_skills_ships_exactly_design_section_17s_set() -> None:
+    on_disk = {p.name for p in SKILLS_DIR.iterdir() if p.is_dir()}
+    assert on_disk == DESIGN_17_SKILLS, (
+        f"only on disk: {sorted(on_disk - DESIGN_17_SKILLS)}; "
+        f"only in design §17: {sorted(DESIGN_17_SKILLS - on_disk)}"
+    )
+
+
+def test_git_pushing_ships_without_its_script() -> None:
+    """G-025: adopted for its prose; `smart_commit.sh` staged, committed and pushed
+    unconditionally, against `auto_push` and the uncommitted-until-regression rule."""
+    assert not (SKILLS_DIR / "git-pushing" / "scripts").exists()
+    body_text = (SKILLS_DIR / "git-pushing" / "SKILL.md").read_text(encoding="utf-8")
+
+    # What must not survive is an *invocation* — a dangling `bash …/smart_commit.sh` fails
+    # at the point of use with no explanation, which is worse than shipping the script.
+    # Naming the removed file in the adoption note is the opposite: it is what makes the
+    # deviation from design §17 legible instead of mysterious.
+    assert not re.search(r"^\s*(bash|sh)\s+\S*smart_commit\.sh", body_text, re.M), (
+        "the skill still invokes the removed script"
+    )
+    assert "auto_push" in body_text
+
+
+def test_the_builder_reads_its_spec_from_the_documented_location() -> None:
+    """G-027. REQ-CON-004, design §7/§9 and `test_runner.py` all say `tests/`, not
+    `.saltcode/tests/`. This is inlined into the Builder's live prompt, so a wrong path
+    sends the agent to a directory that does not exist."""
+    for path in (SKILLS_DIR / "saltcode-builder" / "SKILL.md", AGENTS_DIR / "builder.md"):
+        text = path.read_text(encoding="utf-8")
+        assert ".saltcode/tests/" not in text, path
+        assert "tests/task_{id}_spec.*" in text, path

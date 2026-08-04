@@ -215,7 +215,7 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 - [x] 7.0 **Pin the sub-agent extension contract before authoring anything.** Locate `pi-subagents` (or a substitute meeting the REQ-EXT-015 capability contract) and record its **actual** agent-definition schema — exact frontmatter keys for model, thinking level, tool allowlist, and skill preloading — plus its spawn API. Author `agents/*.md` against the documented schema, never a guessed one. If the schema cannot be established, STOP and raise it (`.claude/rules/stop-and-ask.md`) rather than inventing a format.
 - [x] 7.1 **Source and inventory the skills.** Audit what exists against design §17's 14 (8 `saltcode-*` + 6 cookbooks). For anything missing that is a *general* capability rather than Saltcode-specific, search reputable public sources rather than writing it from scratch — Anthropic's official skills repository, curated community collections, the Pi package gallery, and npm packages carrying the `pi-package` keyword. For each candidate record: source URL, licence, and last-updated date. Anything adopted is **trust-reviewed before install** (REQ-SEC-006) — these run with full system permissions — and its provenance noted in `COOKBOOKS.md`. Prefer a well-maintained upstream skill over a bespoke one; prefer a bespoke one over a stale or unlicensed import.
 - [x] 7.1b **Author the 4 missing Saltcode skills** — `saltcode-architect`, `saltcode-planner`, `saltcode-test-intent`, `saltcode-compactor`. These encode this project's contracts and have no upstream equivalent, so they are written, not sourced. Each mirrors the agent's row in design §7 (inputs, outputs, hard rules) and cites the REQ ids it enforces.
-- [ ] 7.1c Place all 14 skills + the 3 new ones under `skills/` (SKILL.md folders) per design §17; verify they load via `pi config`.
+- [x] 7.1c Place all 14 skills + the 3 new ones under `skills/` (SKILL.md folders) per design §17; verify they load via `pi config`.
 - [x] 7.2 Author `agents/*.md` sub-agent definitions (for the sub-agent extension, e.g. `pi-subagents`) for Scout, Architect, Planner, Test Intent, Evaluator, Builder — each with frontmatter: model, thinking level, tool allowlist (per design §6), and its Saltcode skill **preloaded directly** into the prompt (do NOT rely on Pi's read-tool auto-discovery — locked-down agents lack `read`). The Auditor is NOT a sub-agent (its N-pass judgment is the backend `compute_stability` tool).
 - [ ] 7.2b **Agent-definition quality bar.** Every `agents/*.md` SHALL satisfy all of the following; a definition failing any point is not done:
   1. **Identity** — one paragraph naming who the agent is and the single job it owns. One responsibility per agent; no agent has a second job.
@@ -352,9 +352,27 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
   > regression failure **outside** `task.files_affected` is FLAG HUMAN and never
   > auto-fixed — it is the Trade-B signal, and handing it to a Builder replaces a precise
   > finding with a guess from the one agent that can only see one task.
-  > **Still open on Task 7:** 7.1c (blocked, G-025) and 7.3/7.3b (need `pi-subagents`
-  > adopted — a REQ-SEC-006 trust decision, and the only remaining consumer of the
-  > `pi.subagents.agents` key).
+  > **Still open on Task 7:** 7.3/7.3b (need `pi-subagents` adopted — a REQ-SEC-006 trust
+  > decision, and the only remaining consumer of the `pi.subagents.agents` key).
+
+- **7.1c done (2026-08-02), and G-025 is closed by decision.** `skills/` now holds design
+  §17's set exactly — 8 `saltcode-*` agent skills, the 3 new ones, and all 6 cookbooks —
+  pinned by `test_skills_ships_exactly_design_section_17s_set`, which compares both
+  directions so neither an extra nor a missing skill can drift in. The maintainer resolved
+  both blocked cookbooks: **`git-pushing` ships with `scripts/` removed** (the
+  commit-message prose is the value; `smart_commit.sh` was the whole hazard) and its body
+  was rewritten so it no longer invokes the deleted file — a dangling `bash …/smart_commit.sh`
+  fails at the point of use with no explanation, which is worse than the script — while now
+  stating *why* the steps are explicit. **`python-pro` ships with its licence recorded as
+  undetermined** rather than assumed, so a later licensing decision can see what is and is
+  not known. **G-027 fixed** in both copies and re-synced, under a new standing rule: a
+  factual error that every source document contradicts, in an asset the current task is
+  inlining into a prompt, gets fixed rather than reported.
+  > **Verified:** `pi install -l . --approve` + `pi config -l` renders **all 17**. Worth
+  > recording how that was checked: the TUI shows ~13 rows at a time, so a single frame
+  > listed 13 and looked like four were missing. Scrolling to several depths and taking the
+  > union showed all 17. A truncated view is not evidence of absence — the first reading of
+  > it was wrong, and only re-checking caught that.
 
 ## Task 6 — Prefix assembly in `before_agent_start`  ·  deps: 5, 7, 13  ·  [CHANGED]
 - [ ] 6.1 In `before_agent_start`, assemble `[system(active agent) | design.md | frozen notes | per-call delta]`; return `{ systemPrompt, message }`. Read `event.systemPromptOptions` to respect user config. Pull frozen notes + design.md from the backend/Code-Wiki.

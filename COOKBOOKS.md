@@ -37,8 +37,8 @@ never asserted from the name alone.
 | `test-driven-development` | ✅ | community | **MIT** (`obra/superpowers`) | **High** — see below | **adopt** |
 | `systematic-debugging` | ✅ | community | **MIT** (`obra/superpowers`) | **High** — see below | **adopt** |
 | `agent-tool-builder` | ✅ | `vibeship-spawner-skills` | **Apache 2.0** (declared in frontmatter) | Medium — declared, not bundled | **adopt** |
-| `python-pro` | ✅ | community | **undetermined** | Medium — matches `rmyndharis/antigravity-skills` | **hold** — see F-2 |
-| `git-pushing` | ✅ | community | **undetermined** | Low | **do not adopt** — see F-1 |
+| `python-pro` | ✅ | community | **undetermined** | Medium — matches `rmyndharis/antigravity-skills` | **adopt, licence recorded as undetermined** — F-2 |
+| `git-pushing` | ✅ | community | **undetermined** | Low | **adopt, script removed** — F-1 |
 | `agent-evaluation` | ❌ | `vibeship-spawner-skills` | Apache 2.0 (declared) | Medium | not adopted — not in §17 |
 | `ai-agents-architect` | ❌ | `vibeship-spawner-skills` | Apache 2.0 (declared) | Medium | not adopted — not in §17 |
 
@@ -90,20 +90,30 @@ because it teaches an agent a workflow this project forbids in two separate plac
   uncommitted apply the regression gate has not yet cleared — and sweeps in
   `.saltcode/` state and Test Intent's uncommitted `tests/task_*_spec.*` besides.
 
-Its own frontmatter already says `risk: critical`. This review agrees and gives the
-reason. **Design §17 lists `git-pushing` among the six cookbooks**, so declining it is a
-deviation from that tree and is flagged as such (see G-025) rather than taken silently.
-Task 7.1's own instruction — *"prefer a bespoke one over a stale or unlicensed import"* —
-points the same way: if the capability is wanted, a bespoke skill that honours
-`auto_push` and the checkpoint boundary is the correct form of it.
+Its own frontmatter already said `risk: critical`. This review agrees and gives the
+reason.
 
-### F-2 — `python-pro` has no determinable licence · **hold**
+**Resolution (maintainer, 2026-08-02): adopt it with `scripts/` removed, keep the prose.**
+Design §17 names `git-pushing` among the six cookbooks, and the commit-message guidance is
+the part worth having; the script was the whole hazard. `skills/git-pushing/` therefore
+ships `SKILL.md` only. The body has been rewritten so it does not invoke a file that no
+longer exists — a dangling `bash …/smart_commit.sh` would be worse than the script itself,
+since it fails at the point of use with no explanation — and now states *why* the steps
+are explicit: `auto_push` and the uncommitted-until-regression boundary are project rules
+a one-shot script cannot express.
+
+### F-2 — `python-pro` has no determinable licence · **adopt, recorded**
 
 Content matches `rmyndharis/antigravity-skills`, but no licence travels with the copy and
 none was confirmed upstream. Task 7.1 says to prefer a bespoke skill over an *unlicensed*
-import, so shipping it in `skills/` would contradict the instruction that governs its
-adoption. It is otherwise entirely benign — prose only, no executables. Resolving the
-licence, or replacing it, is a small piece of work and is tracked as G-025.
+import, which is why this was raised rather than waved through. It is otherwise entirely
+benign — prose only, no executables.
+
+**Resolution (maintainer, 2026-08-02): ship it, with the licence recorded here as
+undetermined.** It is a widely circulated community skill with no executable content, and
+it is not redistributed beyond this repository. The honest record is the point: this row
+says "undetermined", not "assumed MIT", so anyone later deciding whether Saltcode can be
+published under a given licence sees exactly what is and is not known.
 
 ### F-3 — `mcp-builder/scripts/evaluation.py` makes outbound API calls
 
