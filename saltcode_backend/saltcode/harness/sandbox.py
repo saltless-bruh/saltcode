@@ -289,14 +289,51 @@ def git_bind_args(sandbox: Path) -> list[str]:
     return args
 
 
+def _systemd_run_usable() -> bool:
+    """Installed *and* able to open a scope — presence is not capability.
+
+    This is `_bwrap_usable`'s lesson (G-C07) applied where it was still missing. On a host
+    with no systemd bus — a container, most CI runners, this build container —
+    `systemd-run` exists on `PATH` but fails at exec with *"Failed to connect to bus"*.
+    Returning its prefix there does not merely fail to apply limits: it makes **every
+    contained command die before its payload runs**, while detection still reports
+    `contained`. Probing once and caching is the same shape as the bwrap probe.
+    """
+    if shutil.which("systemd-run") is None:
+        return False
+
+    cached = _PROBE_CACHE.get("systemd-run")
+    if cached is None:
+        true_binary = shutil.which("true") or "/usr/bin/true"
+        try:
+            probe = subprocess.run(
+                ["systemd-run", "--user", "--scope", "--quiet", "--", true_binary],
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            cached = probe.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            cached = False
+        _PROBE_CACHE["systemd-run"] = cached
+
+    return cached
+
+
 def _limit_wrapper(container_id: str, limits: ContainerLimits) -> tuple[list[str], bool]:
     """Prefix that applies cgroup limits, plus whether they will actually bind.
 
     `systemd-run --user --scope` is the portable way to get cgroup v2 limits
     without privileges. `MemorySwapMax=0` is not optional: without it the cgroup
     swaps rather than kills and the memory ceiling is decorative.
+
+    When the scope cannot be opened, this returns **no prefix and
+    `limits_enforced=False`** rather than a prefix that cannot start (G-013). Containment
+    still holds — the namespace, the bind layout and the network isolation are bwrap's,
+    not systemd's — but the resource ceilings do not, and the caller is told so instead of
+    being handed a command that dies at exec.
     """
-    if shutil.which("systemd-run") is None:
+    if not _systemd_run_usable():
         return [], False
 
     return (

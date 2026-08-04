@@ -150,9 +150,29 @@ handler exists to verify the gating against.
 that works, right up until the tools never appear. Adoption is also a **trust
 decision** (REQ-SEC-006) — both run with full system permissions.
 
-### - [ ] G-013 — `bwrap` reports containment on a host where the limits do not bind
-**Severity:** MED · **Noticed:** Task 5 (baseline run) · **Closed by:** Task 9 or
-Task 20.3 · **Where:** `saltcode_backend/saltcode/harness/sandbox.py`
+### - [x] G-013 — `bwrap` reports containment on a host where the limits do not bind
+**Severity:** MED · **Noticed:** Task 5 (baseline run) · **Closed:** 2026-08-02 ·
+**Where:** `saltcode_backend/saltcode/harness/sandbox.py`
+
+**Closed by applying the fix this entry already described** (maintainer-approved
+2026-08-02). `_limit_wrapper` now calls a new `_systemd_run_usable()` — the same cached
+functional probe `_bwrap_usable` uses for G-C07 — and on failure returns **no prefix with
+`limits_enforced=False`** instead of a prefix that cannot start.
+
+**The effect was larger than "the ceilings are now reported honestly."** On this
+systemd-less container the old code returned a `systemd-run` prefix that died at exec with
+*"Failed to connect to bus"*, so **every contained command failed before its payload ran**
+— which is why 14 tests failed here and passed on CI. With the probe in place those **14
+now pass locally**: the containment path works on any host without systemd (Docker, most
+CI runners, this build container) rather than failing wholesale.
+
+`ContainerLimits`' memory-cap test now skips honestly when `limits_enforced` is false
+instead of failing, and still asserts the cap on CI where systemd exists. Verified by
+`test_the_limit_wrapper_probes_capability_rather_than_presence` (prefix and
+`limits_enforced` must agree, whatever the host) and
+`test_an_unusable_systemd_run_yields_no_prefix_and_says_so`.
+
+*Original entry:*
 
 On a container with no cgroup v2 (`/sys/fs/cgroup/cgroup.controllers` absent) and
 no running systemd, `sandbox_apply --check-containment` answers
@@ -312,9 +332,17 @@ sentence classifier; the honest fix is for the extension to show the removal lis
 Decision 4 before the write lands (Task 13.9's cumulative review), so a wrong strip is
 seen rather than merely reversible.
 
-### - [ ] G-020 — `gac` has no defined index base
-**Severity:** LOW · **Noticed:** Task 10.1 · **Closed by:** a future requirements
-amendment (not yet written — this gap is OPEN) ·
+### - [x] G-020 — `gac` has no defined index base
+**Severity:** LOW · **Noticed:** Task 10.1 · **Closed:** 2026-08-02 ·
+
+**Closed by the amendment it asked for.** REQ-CON-006 **AC4** now fixes `gac` as 1-based
+and bounds it to `[1, n_passes]`, with a never-settling run reporting its final pass —
+the reading the code already documented, now ratified rather than merely implemented.
+`StabilityInfo.gac` tightened from `ge=0` to `ge=1` plus an upper-bound check, so the
+contract rejects both readings it used to admit. Verified by
+`test_gac_is_one_based_and_bounded_by_n_passes`.
+
+*Original entry:* ·
 **Where:** `saltcode_backend/saltcode/stability/measure.py` (`compute_gac`),
 `saltcode/contracts/audit_result.py` (`StabilityInfo.gac`)
 
@@ -335,9 +363,22 @@ human reads `audit_result.json`: an off-by-one in a field nobody validates is th
 thing that survives for a year. The fix is one sentence in `specs/requirements.md`
 REQ-CON-006, not a code change.
 
-### - [ ] G-021 — A heuristic flag overrides a `spec_defect` judgment
-**Severity:** MED · **Noticed:** Task 10.2 · **Closed by:** a future requirements
-amendment (not yet written — this gap is OPEN) ·
+### - [x] G-021 — A heuristic flag overrides a `spec_defect` judgment
+**Severity:** MED · **Noticed:** Task 10.2 · **Closed:** 2026-08-02 ·
+
+**Closed, and it turned out not to need a change of intent at all.** Grilling the
+documents showed the proposal had *already* adjudicated: v8 line 499 — "`spec_defect` ⇒
+Test Intent re-run with detail feedback (**not a retry**)" — and line 656 say the same, and
+REQ-AUD-003 AC1 states it outright. So REQ-AUD-001 AC1's unqualified "unless judgment
+clears it" was not a competing policy but an **internal contradiction** between two
+requirements, which the proposal settles. AC1 now carries the carve-out explicitly, and
+`resolve_reason` lets `spec_defect` win over a fired flag while still reporting what fired.
+The carve-out is narrow: `impl_fail` still loses to the flag, since both route to a Builder
+retry and the gaming reason carries more detail. Verified by
+`test_a_spec_defect_judgment_wins_over_a_heuristic_flag` and
+`test_a_heuristic_flag_still_beats_impl_fail`.
+
+*Original entry:* ·
 **Where:** `saltcode_backend/saltcode/stability/audit.py` (`resolve_reason`)
 
 REQ-AUD-001 AC1 reads: "WHEN a heuristic flag fires, THEN the verdict SHALL be
@@ -358,9 +399,17 @@ which is the more fundamental claim. That is a change to REQ-AUD-001 AC1's wordi
 belongs in the proposal → requirements, not in the code. Until then the code follows the
 requirement as written and says so in the emitted `detail`.
 
-### - [ ] G-022 — The PCD density bars have no specified estimator
-**Severity:** LOW · **Noticed:** Task 14b.3 · **Closed by:** a future requirements
-amendment (not yet written — this gap is OPEN) ·
+### - [x] G-022 — The PCD density bars have no specified estimator
+**Severity:** LOW · **Noticed:** Task 14b.3 · **Closed:** 2026-08-02 ·
+
+**Closed by the amendment it asked for.** REQ-CACHE-003 **AC6** now names the estimator —
+quartiles of the PCD distribution observed over the calibration set, low bar at the 0.25
+quantile and high at the 0.75, each query held out of its own corpus — which is what the
+code already did. The amendment also records the known limitation rather than burying it:
+quartiles are dominated by a handful of values on a small set, and AC5's inertness only
+protects the bars *before* they are measured, not after.
+
+*Original entry:* ·
 **Where:** `saltcode_backend/saltcode/stability/calibrate.py`
 (`PCD_LOW_QUANTILE`, `PCD_HIGH_QUANTILE`)
 

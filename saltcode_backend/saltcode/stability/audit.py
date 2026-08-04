@@ -73,6 +73,12 @@ def resolve_reason(measurement: StabilityMeasurement, report: HeuristicReport) -
     * **No flag** — the judgment stands as-is.
     * **Flags, judgment says `pass`** — cleared. This is the "unless judgment clears it"
       branch, and it is the reason heuristics may be imprecise without costing retries.
+    * **Flags, judgment says `spec_defect`** — the judgment wins (REQ-AUD-001 AC1's
+      carve-out, added 2026-08-02). A flag says the code looks like it games the tests;
+      `spec_defect` says those tests should not be trusted, which is the more fundamental
+      claim and makes the flag's premise moot. Routing it to `gaming_suspected` would also
+      break REQ-AUD-003 AC1 outright, by spending a Builder retry the requirement — and
+      Proposal v8 lines 499 and 656 — say `spec_defect` must not consume.
     * **Flags, judgment says anything else** — `gaming_suspected`, so the Builder retry
       carries the "no hardcoding" reason and the flagged patterns (REQ-AUD-003).
 
@@ -95,11 +101,19 @@ def resolve_reason(measurement: StabilityMeasurement, report: HeuristicReport) -
     if verdict == UNPARSEABLE_VERDICT:
         return verdict, f"judgment unreadable; {report.summary()}"
 
-    # REQ-AUD-001 AC1, read literally: a fired flag that judgment did not clear is
-    # `gaming_suspected`, even when the judgment named a different failure. For
-    # `impl_fail` this loses nothing — both route to a Builder retry, and the gaming
-    # reason carries strictly more detail. For `spec_defect` it does cost something,
-    # and that collision is recorded in specs/known_gaps.md rather than resolved here.
+    if verdict == "spec_defect":
+        # REQ-AUD-001 AC1's carve-out. The flags are still reported — the operator should
+        # see what fired — but they do not change the routing, because a re-spec costs no
+        # retry and a Builder retry here would fix code whose tests are under suspicion.
+        return "spec_defect", (
+            f"the judgment returned 'spec_defect', which wins over {report.summary()} "
+            "(REQ-AUD-001 AC1): the spec is what is in doubt, so a Builder retry would "
+            "target the wrong thing and would cost a retry REQ-AUD-003 AC1 does not spend"
+        )
+
+    # A fired flag the judgment did not clear is `gaming_suspected`, even when the judgment
+    # named a different failure. For `impl_fail` this loses nothing — both route to a
+    # Builder retry, and the gaming reason carries strictly more detail.
     if verdict != "gaming_suspected":
         return "gaming_suspected", (
             f"{report.summary()}; the judgment returned {verdict!r} and did not clear them "

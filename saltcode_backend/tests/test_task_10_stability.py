@@ -652,3 +652,63 @@ def test_a_mis_encoded_evidence_file_returns_a_usage_code(tmp_path: Path) -> Non
         client=ScriptedClient(["pass"] * 3),
     )
     assert code == EXIT_USAGE
+
+
+# ------------------------------- G-020 / G-021: the 2026-08-02 requirements amendments
+
+
+def test_a_spec_defect_judgment_wins_over_a_heuristic_flag() -> None:
+    """REQ-AUD-001 AC1's carve-out, added 2026-08-02 (G-021).
+
+    Before it, any non-`pass` verdict left `gaming_suspected` standing. For `spec_defect`
+    that spent a Builder retry REQ-AUD-003 AC1 says must not be spent, and sent the Builder
+    to fix code whose *tests* the Auditor believes are wrong.
+    """
+    # A diff that trips a heuristic (a fixture literal returned outright) *and* a judgment
+    # that says the spec is the problem.
+    gaming_diff = (
+        "--- a/m.py\n+++ b/m.py\n@@ -1 +1,2 @@\n"
+        '+def total():\n+    return "expected_value"\n'
+    )
+    result, _, report = audit_diff(
+        evidence(diff=gaming_diff, spec='assert total() == "expected_value"'),
+        ScriptedClient(["spec_defect"] * 3),
+    )
+
+    assert report.fired, "the fixture-literal heuristic should have fired on this diff"
+    assert result.reason == "spec_defect"
+    assert result.next_action == "test_intent_respec"
+    # The flags are still surfaced — the operator should see what fired — they just do not
+    # change the routing.
+    assert "spec_defect" in result.detail
+
+
+def test_a_heuristic_flag_still_beats_impl_fail() -> None:
+    """The carve-out is narrow. `impl_fail` and `gaming_suspected` both route to a Builder
+    retry, so the gaming reason is kept for carrying strictly more detail."""
+    gaming_diff = (
+        "--- a/m.py\n+++ b/m.py\n@@ -1 +1,2 @@\n"
+        '+def total():\n+    return "expected_value"\n'
+    )
+    result, _, report = audit_diff(
+        evidence(diff=gaming_diff, spec='assert total() == "expected_value"'),
+        ScriptedClient(["impl_fail"] * 3),
+    )
+    assert report.fired
+    assert result.reason == "gaming_suspected"
+
+
+def test_gac_is_one_based_and_bounded_by_n_passes() -> None:
+    """REQ-CON-006 AC4 (G-020). The contract now rejects both readings it used to admit."""
+    from pydantic import ValidationError
+
+    from saltcode.contracts.audit_result import StabilityInfo
+
+    ok = StabilityInfo(n_passes=3, verdicts=["pass"] * 3, stability_score=1.0, gac=1)
+    assert ok.gac == 1
+
+    with pytest.raises(ValidationError):
+        StabilityInfo(n_passes=3, verdicts=["pass"] * 3, stability_score=1.0, gac=0)
+
+    with pytest.raises(ValidationError):
+        StabilityInfo(n_passes=3, verdicts=["pass"] * 3, stability_score=1.0, gac=4)

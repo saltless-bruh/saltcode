@@ -630,3 +630,54 @@ def test_entrypoint_rejects_a_missing_repo() -> None:
 def test_entrypoint_rejects_an_unknown_backend() -> None:
     code, _ = run_tool("--backend", "nope")
     assert code == EXIT_USAGE
+
+
+# ---------------------------------------------------------------- G-013: the limit probe
+
+
+def test_the_limit_wrapper_probes_capability_rather_than_presence() -> None:
+    """G-013. `shutil.which` is not capability — the lesson G-C07 taught for bwrap.
+
+    On a host with no systemd bus, `systemd-run` is on PATH but fails at exec with
+    "Failed to connect to bus". Returning its prefix there did not merely fail to apply
+    limits: it made **every contained command die before its payload ran**, while
+    detection still answered `contained`.
+    """
+    from saltcode.harness import sandbox as sandbox_module
+
+    sandbox_module._PROBE_CACHE.pop("systemd-run", None)
+    try:
+        prefix, enforced = sandbox_module._limit_wrapper(
+            "probe-test", sandbox_module.ContainerLimits(memory_mb=64, cpus=1.0, timeout_seconds=5.0)
+        )
+        # Whatever this host can do, the two must agree: a prefix is returned if and only
+        # if the limits will actually bind. The old code could return one without the other.
+        assert bool(prefix) == enforced, (
+            f"prefix={prefix!r} but limits_enforced={enforced} — a prefix that cannot start "
+            "is exactly the G-013 failure"
+        )
+        if prefix:
+            assert prefix[0] == "systemd-run"
+            assert "--property=MemorySwapMax=0" in prefix, (
+                "without it the cgroup swaps instead of killing and the cap is decorative"
+            )
+    finally:
+        sandbox_module._PROBE_CACHE.pop("systemd-run", None)
+
+
+def test_an_unusable_systemd_run_yields_no_prefix_and_says_so() -> None:
+    """The honest outcome: containment holds, ceilings do not, and the caller is told.
+
+    `limits_enforced` already existed to express this and was previously never false.
+    """
+    from saltcode.harness import sandbox as sandbox_module
+
+    sandbox_module._PROBE_CACHE["systemd-run"] = False
+    try:
+        prefix, enforced = sandbox_module._limit_wrapper(
+            "probe-test", sandbox_module.ContainerLimits(memory_mb=64, cpus=1.0, timeout_seconds=5.0)
+        )
+        assert prefix == []
+        assert enforced is False
+    finally:
+        sandbox_module._PROBE_CACHE.pop("systemd-run", None)
