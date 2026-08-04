@@ -475,9 +475,22 @@ the spawn), which needs a generator or a drift test. **Raised to the maintainer
 2026-08-02; authoring of `agents/*.md` is stopped until it is answered**
 (`.claude/rules/stop-and-ask.md`).
 
-### - [ ] G-024 — A repo-root `agents/` directory is read by nothing until it is declared
-**Severity:** MED · **Noticed:** Task 7.0 · **Closed by:** Task 7.2 · **Where:**
+### - [x] G-024 — A repo-root `agents/` directory is read by nothing until it is declared
+**Severity:** MED · **Noticed:** Task 7.0 · **Closed:** 2026-08-02 · **Where:**
 `package.json`, `specs/design.md` §17, `docs/subagent_contract.md` §2
+
+**Closed, both halves, and the second one is now proven rather than argued.** The skills
+half was corrected on 2026-08-02 (see below — my claim that the `pi config` leg could not
+pass was wrong). The agents half is now verified against the real loader: with
+`pi-subagents@0.40.0` installed, `discoverAgents()` returns all six definitions with
+**`source: "package"`**, which is only reachable through the `pi.subagents.agents` key
+added in 7.2. Design §17's tree is unchanged and the definitions are discoverable.
+
+Pinned by `test/subagent-contract.test.mjs`, which asserts `source === "package"` for each
+— so a future edit that breaks the declaration fails CI instead of making the agents
+silently invisible.
+
+*Original entry:*
 
 Design §17's tree puts the sub-agent definitions at `agents/` in the repo root.
 `pi-subagents` discovers project agents from `<root>/.agents/` and `<root>/.pi/agents/`
@@ -638,6 +651,33 @@ task-spec gate meaningless while still going green on everything upstream of it.
 (`.claude/rules/stop-and-ask.md`: adjacent breakage is reported, not fixed). The fix is
 deleting `.saltcode/` from that one line, in both copies, and re-running
 `scripts/sync_agent_skills.py`.
+
+### - [ ] G-028 — Task 7.3/7.3b's *behavioural* legs cannot run without providers
+**Severity:** MED · **Noticed:** Task 7.3 · **Closed by:** whoever first runs with a
+DeepSeek key and Saltnitor up, plus Task 13.3 · **Where:** `specs/tasks.md` 7.3, 7.3b
+
+`pi-subagents@0.40.0` is adopted and the definitions resolve correctly, so the
+*mechanism* half of both steps is verified — see `test/subagent-contract.test.mjs`. Two
+legs are not, and neither can be from this box:
+
+1. **"producing the expected behavior on the fixture repo"** (7.3) needs a live model.
+   There is no DeepSeek key and no Saltnitor here, so no agent has actually run.
+2. **Three of 7.3b's five adversarial attempts are behavioural** — Architect asked to
+   emit tasks, Planner handed `context_report.json`, Test Intent asked to write
+   implementation code. Each needs a model to make the attempt, and the *blocking* for the
+   Planner and Test Intent cases lives in `pi.on("tool_call")`, which is **Task 13.3** and
+   does not exist yet.
+
+What **is** proven, and is the part 7.3b calls out as the real bar — *"a definition that
+merely says 'do not' without a mechanism blocking it is a finding, not a pass"*: Scout's
+allowlist contains no `read`, no `saltcode_read_scoped` and no shell, so "Scout asked for
+a file body" fails by absent capability; and the Builder holds no `write` tool at all, so
+it cannot touch `tests/**` — or anything else — outside its diff.
+
+*Why it matters:* the tool-level boundaries are the ones that hold by construction and
+they are verified. The behavioural ones are currently held by prompt text alone, which is
+exactly the distinction 7.3b exists to draw. Both boxes stay unticked until the remaining
+legs run.
 
 ### - [ ] G-008 — `skills/` is an empty placeholder
 **Severity:** MED · **Noticed:** Task 0.2 · **Closed by:** Task 7.1c ·

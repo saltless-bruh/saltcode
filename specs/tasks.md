@@ -352,8 +352,34 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
   > regression failure **outside** `task.files_affected` is FLAG HUMAN and never
   > auto-fixed — it is the Trade-B signal, and handing it to a Builder replaces a precise
   > finding with a guess from the one agent that can only see one task.
-  > **Still open on Task 7:** 7.3/7.3b (need `pi-subagents` adopted — a REQ-SEC-006 trust
-  > decision, and the only remaining consumer of the `pi.subagents.agents` key).
+  > **Still open on Task 7:** 7.3/7.3b — see the adoption note below.
+
+- **`pi-subagents@0.40.0` adopted (maintainer, 2026-08-02); 7.3/7.3b partly verified, both
+  boxes still unticked.** Installed as an exact-pinned devDependency, not yet bundled — the
+  recommendation was to run the spawn checks first. **Trust review (REQ-SEC-006):** MIT,
+  peers on the correct `@earendil-works/*` scope, source read at 7.0. `npm audit` reports 3
+  advisories (2 high, 1 moderate) — **identical with and without it**, all from
+  `@earendil-works/pi-coding-agent` → `undici` and `brace-expansion`. The adoption
+  introduces none.
+  > **What the real loader now proves** (`test/subagent-contract.test.mjs`, 11 assertions,
+  > wired into the extension CI lane). Every other check on these definitions reads the
+  > Markdown; this one asks the extension that will consume them what it *sees*.
+  > `discoverAgents()` returns all six with **`source: "package"`** — the
+  > `pi.subagents.agents` key works, closing **G-024**'s open half. All six resolve
+  > `replace` + no inheritance (REQ-EXT-012), design §6's model and thinking exactly, and
+  > **the skill is present in every child prompt** (5.5k–9.1k chars) — DD-16 confirmed
+  > through the loader, which is the only place the G-023 workaround can be proven.
+  > **7.3b's mechanism bar is met where it can be:** Scout's resolved allowlist has no
+  > `read`, no `saltcode_read_scoped` and no shell, so "Scout asked for a file body" fails
+  > by *absent capability*; and the Builder holds no `write` tool at all, so it cannot
+  > reach `tests/**` by any route.
+  > **Why both boxes stay unticked — G-028.** 7.3's "producing the expected behavior on the
+  > fixture repo" needs a live model, and there is no DeepSeek key and no Saltnitor here, so
+  > no agent has run. Three of 7.3b's five attempts are behavioural (Architect asked to emit
+  > tasks, Planner handed `context_report.json`, Test Intent asked to write code) and two of
+  > those are blocked by `pi.on("tool_call")`, which is **Task 13.3** and does not exist
+  > yet. The tool-level boundaries hold by construction and are verified; the behavioural
+  > ones are currently held by prompt text alone, which is the exact distinction 7.3b draws.
 
 - **7.1c done (2026-08-02), and G-025 is closed by decision.** `skills/` now holds design
   §17's set exactly — 8 `saltcode-*` agent skills, the 3 new ones, and all 6 cookbooks —

@@ -85,3 +85,11 @@ jobs:
 
     - name: Lint and format check
       run: npm run lint
+
+    # Resolves the six sub-agent definitions through `pi-subagents`' own loader. Every
+    # other check on them reads the Markdown; this is the only one that asks the extension
+    # that will actually consume them what it sees — so it is the only thing that catches
+    # a `pi.subagents.agents` path the loader ignores (G-024), a skill that never reaches
+    # the child prompt (G-023), or a tool allowlist that differs from what the file claims.
+    - name: Verify the sub-agent contract
+      run: npm run test:agents
