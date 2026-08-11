@@ -75,7 +75,7 @@ workspace/         # target projects Saltcode operates on
 .agents/           # the same assets in Antigravity's format — a separate tool's config
 ```
 
-## Build state (2026-07-31)
+## Build state (2026-08-11)
 
 - **Track A is built out, with one leg still open.** v9 **Tasks 0–3, 5, 9, 10, 12, 14b,
   7b** are done and ticked. **Task 4 is not** — its box stays unticked because 4.6 is
@@ -90,13 +90,24 @@ workspace/         # target projects Saltcode operates on
   (N-pass Auditor stability, anti-gaming heuristics, `apply_live`, scoped read) ·
   Task 12 (Spec Compactor) · Task 14b (measured-then-fixed threshold calibration) ·
   Task 7b (the thirteen CLI entrypoints + `docs/entrypoints.md` + the conformance suite).
-  **708 tests pass locally; 14 fail only in this build container** (no systemd bus →
-  `systemd-run` cannot apply cgroup limits; they pass on CI — see G-013). `ruff` +
-  `pyright --strict` clean; extension lane (`tsc --noEmit`, `biome`) clean.
-- **Next:** **Track B**, which starts at **Task 7** (sub-agent definitions) and runs
-  through Task 13 (the extension itself). The backend is now feature-complete for
-  Phase 2; nothing in Track B depends on further backend work. Build order is at the
-  bottom of `specs/tasks.md`.
+  **787 backend tests pass locally, 1 skips** (G-013's honest `limits_enforced=false` on a
+  systemd-less host). `ruff` + `pyright --strict` clean.
+- **Track B is under way.** **Task 7** (sub-agent definitions) is done except 7.2b/7.3/7.3b
+  — the mechanism is verified through `pi-subagents@0.40.0`'s own loader, the behaviour
+  needs a live model (G-028). **Task 13** (the extension) is built: the factory is
+  `extensions/saltcode.ts` and the decisions live as pure functions in
+  `extensions/saltcode/*.ts`, so the privacy, write-scope, budget and routing rules are
+  provable without a running Pi. **13.2, 13.4, 13.5, 13.6, 13.7 and 13.9 are ticked;
+  13.1, 13.3, 13.8, 13.10 and Task 13's box are not** — see the notes under Task 13 in
+  `specs/tasks.md` for exactly which leg is open on each. Extension lane: `tsc --noEmit`
+  and `biome` clean, **86 tests** (`npm run test:agents`).
+- **Two open questions for the maintainer**, both raised rather than guessed:
+  **G-029** — nothing exposes `run_in_container` as a CLI entrypoint, so the contained
+  `write`/`edit`/`bash` overrides currently *refuse* instead of routing; REQ-SEC-007 AC1 is
+  unmet, and the recommended fix is a `contained_exec` entrypoint. **G-030** — Tasks 13.1
+  and 11.2 both claim Saltnitor provider registration; 11.2 should own it.
+- **Next:** the rest of Track B — **{6, 8, 11}** build on the extension core, then 13b,
+  then 18. Build order is at the bottom of `specs/tasks.md`.
 - **Deployment (confirmed 2026-07-28):** everything — Saltcode, Saltnitor, Docker,
   the embedding endpoint — runs on **one machine, this one**. The privacy boundary
   is therefore the box: only loopback counts as local, and a LAN address is off-box.

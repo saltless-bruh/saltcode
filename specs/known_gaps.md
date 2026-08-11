@@ -679,6 +679,16 @@ they are verified. The behavioural ones are currently held by prompt text alone,
 exactly the distinction 7.3b exists to draw. Both boxes stay unticked until the remaining
 legs run.
 
+**Half of blocker 2 is gone, 2026-08-11 (Task 13.3).** `pi.on("tool_call")` now exists and
+is tested: `decideAccess` blocks a `tests/**` write, a non-allowlisted command, an
+out-of-scope scoped read, and any scoped read by Scout — 15 assertions in
+`test/access-control.test.mjs`, written as attempts rather than examples. So the *blocking*
+half of 7.3b's Planner and Test-Intent cases is in place. What still cannot run is the
+*attempt*: making the Planner ask for `context_report.json` needs a model, and there is
+still no DeepSeek key and no Saltnitor here. **Blocker 1 is untouched and both boxes stay
+unticked.** Whoever first runs with providers up can close this in one pass — the
+mechanism is now entirely in place on both sides.
+
 ### - [ ] G-008 — `skills/` is an empty placeholder
 **Severity:** MED · **Noticed:** Task 0.2 · **Closed by:** Task 7.1c ·
 **Where:** `skills/`
@@ -691,6 +701,81 @@ the tasks that produce them.
 *Why it matters:* nothing breaks today, but the package is not installable-and-
 complete until both land, so `pi install` currently registers an extension with
 no skills behind it.
+
+### - [ ] G-029 — Nothing can run a command *inside* the container, so the built-in override refuses instead
+**Severity:** HIGH · **Noticed:** Task 13.3 · **Closed by:** unassigned — needs a
+maintainer decision · **Where:** `extensions/saltcode/builtins.ts`,
+`saltcode_backend/saltcode/harness/sandbox.py` (`run_in_container`), `docs/entrypoints.md`
+
+REQ-SEC-007 AC1: when the human or any agent invokes `write`/`edit`/`bash`, execution
+SHALL route through the security container, not the raw host. REQ-SEC-001 puts container
+spawning in the backend, invoked via `pi.exec`. **The two do not meet.** The backend's
+thirteen CLI entrypoints each run one *specific* contained job — `static_gate` runs the
+linters on a sandbox, `test_run` runs one task spec, `sandbox_apply` runs `git apply` —
+and none accepts an arbitrary argv. `run_in_container()` is exactly the primitive needed
+and has no CLI surface, so the extension cannot reach it.
+
+Task 13.3 says "route through the container (Task 3.1)", which reads as an assumption
+that the channel already exists. It exists as a Python function; what is missing is its
+exposure, and the roster that would have exposed it is Task 7b's — which enumerated
+design §5.3's twelve tools plus `connectivity` and had no reason to notice a fourteenth.
+
+**What is implemented.** The overrides are registered on Pi's own
+`create{Bash,Write,Edit}ToolDefinition`, so schemas, result shapes and renderers stay the
+built-ins'. The REQ-SEC-002 allowlist and the `tests/**` check run inside them, and both
+run again at `tool_call`. With no `ContainedExec` injected, every mutating call **refuses
+with a reason**. Nothing runs uncontained — that half of DD-13's hole is closed, and
+refusing is REQ-SEC-005's own posture when containment is unavailable.
+
+**What is not.** Refusing removes the capability rather than containing it, so AC1 is not
+met and interactive `write`/`edit`/`bash` are unusable rather than safe. Task 13's
+Done-when leg *"a built-in `bash rm -rf` in interactive mode is contained (routed to the
+container, host untouched)"* is unsatisfied, and 13.3's box is unticked.
+
+**The options, with a recommendation:**
+
+1. **Add a `contained_exec` entrypoint** (argv in, `{stdout, stderr, code}` out, allowlist
+   re-checked backend-side, audit-logged), extend `docs/entrypoints.md` and the Task 7b
+   conformance suite, and inject it here. Makes AC1 true as written; the seam is already
+   in place, so the extension side is a few lines. Cost: it is backend scope opened inside
+   Task 13, and it hands the extension a general "run this contained" primitive whose
+   safety rests entirely on the allowlist. **Recommended** — the allowlist is already the
+   thing REQ-SEC-002 relies on everywhere else, so this adds no new trust assumption.
+2. **Keep the refusal as the shipped behaviour** and amend REQ-SEC-007 AC1 to say the
+   mutating built-ins are *disabled* rather than contained. Honest, zero new code, and it
+   makes the spec match reality — but it removes interactive `write`/`edit`/`bash`
+   entirely, which is a real usability loss the requirement was written to avoid.
+3. **Route only the commands the existing entrypoints already own** (`pytest` → `test_run`,
+   `ruff`/`pyright` → `static_gate`, `git apply` → `sandbox_apply`). **Rejected, recorded
+   so it is not re-proposed:** those entrypoints take their own arguments, not an argv, so
+   `bash "pytest -k foo"` cannot be expressed. It would silently run something other than
+   what was asked.
+
+*Why it matters:* this is the interactive-mode hole DD-13 exists to close, and it is
+currently closed by subtraction. Anyone reading "Saltcode contains the built-ins" would
+reasonably expect option 1's behaviour.
+
+### - [ ] G-030 — Two tasks both claim Saltnitor provider registration
+**Severity:** LOW · **Noticed:** Task 13.1 · **Closed by:** Task 11.2, once the overlap is
+adjudicated · **Where:** `specs/tasks.md` 13.1 and 11.2
+
+Task 13.1 lists "register Saltnitor models" among `session_start`'s duties. Task 11.2 is
+`pi.registerProvider("saltnitor", {baseUrl, api, models})` with an async `/v1/models`
+factory and graceful degradation — the same work, specified in more detail, in a task
+that `deps: 2, 13`.
+
+13.1's other duties are done (state replay, the connectivity probe, `session_shutdown`,
+`resources_discover`). Provider registration is not, because doing it here would be Task
+11's work inside Task 13, and `.claude/rules/stop-and-ask.md` forbids expanding scope.
+13.1's box therefore stays unticked over one clause.
+
+*Recommendation:* treat 11.2 as the owner and strike the clause from 13.1 — the detail
+lives in 11, and `session_start` calling into a Task-11 module is the natural shape. That
+is a one-line tasks.md edit, so it is asked rather than taken.
+
+*Why it matters:* only bookkeeping — but an unticked box with no stated reason is exactly
+what the ledger discipline exists to prevent, and "someone will do it in 11" is not
+visible from 13.
 
 ---
 

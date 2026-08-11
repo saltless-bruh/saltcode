@@ -426,17 +426,78 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 ## Task 13 — The TypeScript extension (the bridge)  ·  deps: 7b, 7  ·  [REPLACED]
 > Replaces the old Typer CLI + Textual TUI entirely. This is the core integration piece.
 - [ ] 13.1 **Factory + lifecycle:** `export default function (pi)`; `session_start` (replay `ctx.sessionManager.getEntries()` → rebuild sprint/budget/task state; probe connectivity; register Saltnitor models); `session_shutdown` cleanup; `resources_discover` contributes skill/prompt paths if not bundled.
-- [ ] 13.2 **Tool registration (bridge):** `pi.registerTool` for each `saltcode_*` capability (TypeBox params; `StringEnum` for enums) whose `execute` talks to the **backend daemon** (Task 19) over stdio/socket, falling back to `pi.exec("python", ["-m","saltcode.tools.<x>", …])` if the daemon is down.
+- [x] 13.2 **Tool registration (bridge):** `pi.registerTool` for each `saltcode_*` capability (TypeBox params; `StringEnum` for enums) whose `execute` talks to the **backend daemon** (Task 19) over stdio/socket, falling back to `pi.exec("python", ["-m","saltcode.tools.<x>", …])` if the daemon is down.
 - [ ] 13.3 **Access control + built-in override:** `pi.on("tool_call")` blocks `tests/**` writes, non-allowlisted commands, and out-of-scope scoped reads (`{ block:true, reason }`, `isToolCallEventType`); **override the built-in `write`/`edit`/`bash`** with same-named tools that route through the container (Task 3.1) so no live built-in bypasses containment in interactive mode; per-agent tool access comes from the sub-agent definitions (Task 7) + `pi.setActiveTools` at the top level.
-- [ ] 13.4 **Model/thinking routing:** per agent, `ctx.modelRegistry.find(...)` → `pi.setModel` (handle `false` → fallback chain, REQ-EXT-010) + `pi.setThinkingLevel(level)` per design §6; update status on `model_select`/`thinking_level_select`.
-- [ ] 13.5 **State:** `pi.appendEntry` for sprint/budget/task; budget tracker (shared ≤3, Tier-A sub-cap 2, `spec_defect` free) + loop counters (A≤2/P≤3) implemented here, observable, never silently reset.
-- [ ] 13.6 **Compaction:** `pi.on("session_before_compact")` preserves the active `## HARD CONSTRAINTS` in any summary (or cancels).
-- [ ] 13.7 **TUI:** `ctx.ui.setWidget` (phase, task deck, gate pipeline, cost), `ctx.ui.setStatus`, `ctx.ui.notify`, `ctx.ui.confirm` for the four decisions; richer dashboard via `ctx.ui.custom` guarded by `ctx.mode==="tui"`.
+- [x] 13.4 **Model/thinking routing:** per agent, `ctx.modelRegistry.find(...)` → `pi.setModel` (handle `false` → fallback chain, REQ-EXT-010) + `pi.setThinkingLevel(level)` per design §6; update status on `model_select`/`thinking_level_select`.
+- [x] 13.5 **State:** `pi.appendEntry` for sprint/budget/task; budget tracker (shared ≤3, Tier-A sub-cap 2, `spec_defect` free) + loop counters (A≤2/P≤3) implemented here, observable, never silently reset.
+- [x] 13.6 **Compaction:** `pi.on("session_before_compact")` preserves the active `## HARD CONSTRAINTS` in any summary (or cancels).
+- [x] 13.7 **TUI:** `ctx.ui.setWidget` (phase, task deck, gate pipeline, cost), `ctx.ui.setStatus`, `ctx.ui.notify`, `ctx.ui.confirm` for the four decisions; richer dashboard via `ctx.ui.custom` guarded by `ctx.mode==="tui"`.
 - [ ] 13.8 **Commands + sub-agent orchestration:** `pi.registerCommand` for `/sprint` (autonomous loop that **spawns each Phase-1 agent as an isolated sub-agent** in dependency order via the sub-agent extension, awaiting + validating each result — NOT `sendUserMessage` into one session), `/review`, `/status`, `/cost`. Pausing only at Decisions 1–4.
-- [ ] 13.9 **Flags:** `pi.registerFlag("dry-run")` (no subprocess executes; nothing outside `.saltcode/` is written) and `pi.registerFlag("builder-escalation")` (default OFF; Task 16).
+- [x] 13.9 **Flags:** `pi.registerFlag("dry-run")` (no subprocess executes; nothing outside `.saltcode/` is written) and `pi.registerFlag("builder-escalation")` (default OFF; Task 16).
 - [ ] 13.10 **Phase-2 loop** (extension side): per task, spawn the **Builder sub-agent** → `saltcode_diff_check` → `saltcode_sandbox_apply` → `saltcode_static_gate` (dirty → short-circuit) → `saltcode_test_run` (fail → short-circuit) → `saltcode_stability` (backend N-pass Auditor); on instability + online, re-run the judgment once on DeepSeek Flash; `pass` → `saltcode_apply_live`, next task; route `impl_fail`/`gaming_suspected`/`spec_defect` per REQ-AUD-003; FLAG HUMAN on budget exhaustion.
 - **Satisfies:** REQ-EXT-003..015, REQ-ORC-002..007, REQ-FAIL-001..004, REQ-SEC-004/006/007, REQ-AUD-002 (escalation), REQ-CAD-003.
 - **Done when:** `/sprint` drives a full sprint pausing only at the four decisions; each Phase-1 agent runs in an isolated sub-agent context; a `tests/**` write and a non-allowlisted command are blocked at `tool_call`; a built-in `bash rm -rf` in interactive mode is contained (routed to the container, host untouched); budget exhaustion flags human; 2 Tier-A failures → 3rd on Tier B; the live tree is unmodified until Auditor `pass`; `--dry-run` runs nothing and writes nothing outside `.saltcode/`; state survives `/resume`.
+
+- **13.2, 13.4, 13.5, 13.6, 13.7, 13.9 done (2026-08-11); 13.1, 13.3, 13.8, 13.10 and
+  Task 13's own box stay unticked.** The extension is built: `extensions/saltcode.ts` is the
+  factory and the decisions live in `extensions/saltcode/*.ts` as pure functions, so the
+  parts that must be provable without a running Pi are. **75 new tests** across five
+  `node --test` suites (86 in the extension lane with the Task 7 contract test); `tsc
+  --noEmit` and `biome` clean; the backend lane re-run unchanged at **787 passed, 1
+  skipped** (the skip is G-013's honest `limits_enforced=false` on this systemd-less host).
+
+  Layout note: helper modules sit under `extensions/saltcode/`, which Pi's loader does
+  **not** treat as a second extension — `discoverExtensionsInDir` picks up `*.ts` files and
+  subdirectories holding `index.ts` or a `package.json`, and that directory has neither.
+  Adding either would double-register the extension. `tsconfig.json` gained
+  `allowImportingTsExtensions` because nothing is built: Pi resolves the `.ts` specifiers at
+  runtime through jiti, and Pi's own `.d.ts` files are written the same way.
+
+  **Done-when legs, one by one.** Verified: `tests/**` writes and non-allowlisted commands
+  blocked at `tool_call`; budget exhaustion flags human; 2 Tier-A failures → 3rd on Tier B;
+  the live tree untouched until the Auditor passes (the loop's gate order is asserted);
+  `--dry-run` executes nothing and writes only inside `.saltcode/`. Unverified: `/sprint`
+  end to end and each Phase-1 agent's isolated spawn both need a live model — same wall as
+  **G-028** — and `/resume` state survival is proven as a unit-level replay, not through a
+  real session restart. **Not satisfied: "a built-in `bash rm -rf` is contained."**
+
+  > **13.3 is half done, and the missing half is a real hole — G-029.** The `tool_call`
+  > handler is complete and tested. The built-in override is registered on Pi's own
+  > `create{Bash,Write,Edit}ToolDefinition` factories, so schemas and renderers stay the
+  > built-ins', and the allowlist plus the `tests/**` check run inside it. But REQ-SEC-007
+  > AC1 says execution SHALL route *through the container*, the container is spawned by the
+  > backend (REQ-SEC-001), and **none of the thirteen CLI entrypoints runs an arbitrary
+  > allowlisted command inside it** — `harness/sandbox.py::run_in_container` has no CLI
+  > surface. The overrides therefore take an injected `ContainedExec` and, with none
+  > supplied, **refuse**. Nothing runs uncontained, which is REQ-SEC-005's own rule when
+  > containment is unavailable; but refusing removes the capability rather than containing
+  > it, so the leg is not met and the box is not ticked. See G-029 for the options.
+
+  > **13.1 is unticked over one clause: "register Saltnitor models."** Replay, the
+  > connectivity probe, `session_shutdown` and `resources_discover` are done. Provider
+  > registration is **Task 11.2**'s own sub-step (`pi.registerProvider("saltnitor", …)`
+  > with an async `/v1/models` factory), and Task 11 `deps: 2, 13`. Doing it here would be
+  > Task 11's work inside Task 13. Raised in G-030 rather than resolved by guessing which
+  > task owns it.
+
+  > **13.8 and 13.10 are implemented and unticked for the same reason.** `/sprint`,
+  > `/review`, `/status` and `/cost` are registered; Phase 1 spawns Scout → Architect →
+  > Planner → Test Intent → Evaluator serially over the `pi-subagents` delegation contract,
+  > **validating each artifact through `saltcode_validate_contract` before the next agent
+  > starts** — so a malformed `design.md` never reaches the Planner. The Phase-2 loop routes
+  > every verdict per REQ-AUD-003 and is tested against a scripted `Gates`. What is missing
+  > is a live run: no DeepSeek key, no Saltnitor, no MCP client extension yet (G-011).
+
+  > **Deliberately left to the tasks that own them**, with the seams named in the code:
+  > the cache ladder before Phase 1 and the Evaluator's re-loop routing (Task 8 — a
+  > non-`pass` Evaluator therefore *stops and reports* rather than looping); the regression
+  > gate, the commit and the checkpoint (Tasks 17, 18 — so a passed task's diff is applied
+  > and **uncommitted**, which is design §10.1's intended state, not an oversight); the
+  > daemon client (Task 19.2 — `pi.exec` is the documented fallback and is what runs today).
+
+  > **Verification:** `npm run typecheck` · `npm run lint` · `npm run test:agents`
+  > (86 passed) · `../.venv/bin/ruff check .` · `../.venv/bin/pytest -q` (787 passed,
+  > 1 skipped). All 2026-08-11.
 
 ## Task 13b — Package as a Pi Package (manifest + prompts + publish)  ·  deps: 13  ·  [NEW]
 - [ ] 13b.1 Author prompt templates `prompts/{sprint,phase1,phase2,review}.md` (frontmatter `description` + `argument-hint`; `$@`/`$1` args) as reusable instruction blocks for interactive mode and `/sprint` composition.
