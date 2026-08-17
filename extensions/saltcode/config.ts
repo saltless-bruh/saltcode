@@ -31,6 +31,13 @@ export interface SaltcodeConfig {
   /** design §10.1 run modes. Consumed by Task 18; read here so `/status` can show it. */
   autoMode?: "off" | "hybrid" | "full";
   autoPush?: boolean;
+  /**
+   * REQ-EXT-010 AC3: `[providers] fallback = ["qwen/qwen3.6-plus", …]`, tried after an
+   * agent's own fallbacks and before Saltnitor Tier B. Entries are `provider/model`.
+   */
+  providerFallbacks?: ReadonlyArray<{ provider: string; model: string }>;
+  /** Where Saltnitor's router answers. Loopback only — a LAN address is off-box. */
+  saltnitorBaseUrl?: string;
 }
 
 /** Defaults that hold when there is no config, or when the project is untrusted. */
@@ -178,6 +185,19 @@ export function configFromToml(table: TomlTable): SaltcodeConfig {
   if (typeof local?.a_focus_threshold === "number")
     config.aFocusThreshold = local.a_focus_threshold;
   if (typeof local?.mtp_enabled === "boolean") config.mtpEnabled = local.mtp_enabled;
+
+  const providers = section(table, "providers");
+  const fallback = providers?.fallback;
+  if (Array.isArray(fallback)) {
+    config.providerFallbacks = fallback
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.split("/"))
+      // A malformed entry is dropped rather than guessed at: "qwen" with no model is not
+      // a fallback, and inventing one would route a turn somewhere nobody chose.
+      .filter((parts): parts is [string, string] => parts.length === 2 && parts.every(Boolean))
+      .map(([provider, model]) => ({ provider, model }));
+  }
+  assignString(providers, "saltnitor_base_url", (v) => (config.saltnitorBaseUrl = v));
 
   const checkpoint = section(table, "checkpoint");
   const mode = checkpoint?.auto_mode;

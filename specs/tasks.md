@@ -408,13 +408,59 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 - **Done when:** a byte-diff of segments 1–3 across two calls in one session is empty; segment 2 is stable within a pass and may change across a re-loop.
 
 ## Task 11 — Saltnitor + DeepSeek/Qwen as registered providers  ·  deps: 2, 13  ·  [CHANGED]
-- [ ] 11.1 `pi.registerProvider("deepseek", { api:"openai-completions"|… , models:[v4-flash, v4-pro], apiKey:"$DEEPSEEK_API_KEY" })` and optional Qwen provider.
-- [ ] 11.2 `pi.registerProvider("saltnitor", { baseUrl:"http://127.0.0.1:8765/v1", api:"openai-completions", models:[A_STD, A_FOCUS, B] })`; prefer an **async factory** that fetches `/v1/models`; degrade gracefully if unreachable. **This step is the sole owner of Saltnitor provider registration** (maintainer, 2026-08-11 — G-030); Task 13.1 wires the lifecycle and calls into it.
+- [x] 11.1 `pi.registerProvider("deepseek", { api:"openai-completions"|… , models:[v4-flash, v4-pro], apiKey:"$DEEPSEEK_API_KEY" })` and optional Qwen provider.
+- [x] 11.2 `pi.registerProvider("saltnitor", { baseUrl:"http://127.0.0.1:8765/v1", api:"openai-completions", models:[A_STD, A_FOCUS, B] })`; prefer an **async factory** that fetches `/v1/models`; degrade gracefully if unreachable. **This step is the sole owner of Saltnitor provider registration** (maintainer, 2026-08-11 — G-030); Task 13.1 wires the lifecycle and calls into it.
 - [ ] 11.3 Before a Tier-B turn, `ensure` the Saltnitor router section (`POST /v1/ensure {profile:"B"}`); on oracle OOM refusal → FLAG HUMAN (don't crash). Enforce sequential Builder/Auditor (one resident). Select A_STD vs A_FOCUS by task input token count (default 32K). VRAM triangle: A_FOCUS disables high-thinking; MTP opt-in.
-- [ ] 11.4 Offline: route ALL Phase-1 agents to a Tier-B Saltnitor model via `pi.setModel`; keep Auditor faithfulness local.
-- [ ] 11.5 Read `mtp_enabled` and `a_focus_threshold` from `saltcode.toml [local]`; apply to profile selection (A_STD vs A_FOCUS, MTP on/off) in the extension's model-routing handler. Implement the per-turn provider failover chain (configured → `[providers.fallback]` → Saltnitor Tier B → FLAG HUMAN), logging each fallback.
+- [x] 11.4 Offline: route ALL Phase-1 agents to a Tier-B Saltnitor model via `pi.setModel`; keep Auditor faithfulness local.
+- [x] 11.5 Read `mtp_enabled` and `a_focus_threshold` from `saltcode.toml [local]`; apply to profile selection (A_STD vs A_FOCUS, MTP on/off) in the extension's model-routing handler. Implement the per-turn provider failover chain (configured → `[providers.fallback]` → Saltnitor Tier B → FLAG HUMAN), logging each fallback.
 - **Satisfies:** REQ-EXT-002, REQ-EXT-010, REQ-MOD-001, REQ-MOD-001b, REQ-MOD-002..006, REQ-AUD-002 (offline), REQ-GATE-001.
 - **Done when:** providers appear in `pi --list-models`; a high-complexity task ensures `B` before inference; an oracle refusal yields a human flag; offline planning uses `B` and makes no API call; A_FOCUS is selected >32K with thinking off.
+
+- **11.1, 11.2, 11.4 and 11.5 done (2026-08-17); 11.3 and Task 11's box are not.**
+  `extensions/saltcode/providers.ts` registers DeepSeek (Flash + Pro), Saltnitor, and an
+  optional Qwen; `session_start` calls it before anything routes. **13 tests** in
+  `test/providers.test.mjs`.
+
+  > **Saltnitor discovery degrades rather than fails, and that is the load-bearing part.**
+  > `/v1/models` narrows the registered set to the sections the router reports; when it is
+  > unreachable, all three configured sections register anyway with a warning. Failing
+  > closed here would be exactly wrong: the **offline** path depends on Saltnitor models
+  > being registered, so a router that is merely slow to start would remove the only route
+  > that works without the network.
+
+  > **The VRAM triangle is a pure function** (`reconcileLocalTurn`), reconciled after
+  > routing so the level Pi actually holds is the one that fits: `A_FOCUS` forces thinking
+  > `off` (AC1) and never carries MTP (AC3); on `A_STD` thinking and MTP cannot both be
+  > held, and thinking — the thing the caller asked for — wins. Every trade is **named** in
+  > a notification rather than applied silently; a Builder turn that quietly stopped
+  > reasoning is the kind of degradation nobody attributes to the right cause. Tier B is
+  > exempt: its hybrid offload does not compete for the same 12GB.
+
+  > **An `ensure` OOM refusal is a FLAG HUMAN, an unreachable router is not.** The
+  > distinction is the whole of REQ-MOD-005 AC1: "the box cannot fit this" needs a person,
+  > "the router is not up" needs a retry or the documented llama.cpp fallback. Both are
+  > returned as typed outcomes rather than thrown, so the sprint pauses with its state
+  > intact instead of unwinding.
+
+  > **11.5's config half is done:** `[local] mtp_enabled` / `a_focus_threshold` and
+  > `[providers] fallback = ["qwen/qwen3.6-plus", …]` are read and applied — the fallback
+  > list is threaded into `applyRoute` after each agent's own fallbacks and before Tier B
+  > (REQ-EXT-010 AC3). A malformed entry is dropped rather than guessed at.
+
+  > **Why 11.3 stays unticked — one leg.** `ensure` is called before the Builder's turn and
+  > the loop is sequential by construction, so one model is resident (REQ-MOD-004). But the
+  > **Auditor's** residency is not ensured from here: its N-pass judgment runs inside the
+  > backend's `compute_stability`, which picks its own router section via `--model`, so the
+  > extension never sees that turn. Ensuring a profile the extension is not about to use
+  > would be a lie; the honest fix is for `compute_stability` to ensure its own section,
+  > which is backend work this task does not own. Recorded as **G-031**.
+
+  > **Also unverified:** *"providers appear in `pi --list-models`"* needs a real `pi` run
+  > against an installed package, which is the same shape as Task 7's `pi config` leg and
+  > is reachable here — it is simply not done yet.
+
+  > **Verification:** `npm run typecheck` · `npm run lint` · `npm run test:agents`
+  > (**106 passed**). 2026-08-17.
 
 ## Task 8 — Cache ladder + Phase-Gate orchestration (extension)  ·  deps: 5, 7, 13  ·  [CHANGED]
 - [ ] 8.1 In the `/sprint` handler: resolve scope (`saltcode_scope_probe` or `--scope`), run `saltcode_cache_lookup` (exact → semantic with **PCD-adaptive** Architect confirmation) → reuse or fire Phase 1; stop at first hit.

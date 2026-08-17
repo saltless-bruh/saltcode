@@ -51,6 +51,7 @@ import {
 import { createContainedExec } from "./saltcode/contained.ts";
 import { createGates } from "./saltcode/gates.ts";
 import { runTask, type TaskSpec } from "./saltcode/phase2.ts";
+import { ensureProfile, reconcileLocalTurn, registerProviders } from "./saltcode/providers.ts";
 import { applyRoute, describeRoute } from "./saltcode/routing.ts";
 import { openSprint, readTaskOrder, runPhase1 } from "./saltcode/sprint.ts";
 import {
@@ -187,6 +188,20 @@ export default function saltcode(pi: ExtensionAPI): void {
         ui.notify(`${tool} refused: ${reason}`, "warning");
       },
     });
+
+    // Task 11.1/11.2 (G-030 gave 11.2 ownership): register the providers before anything
+    // tries to route. Saltnitor degrades to its three configured sections when the router
+    // is not up, because the *offline* path depends on those models existing — a slow
+    // router must not remove the only route that works without the network.
+    const registrations = await registerProviders(pi, {
+      ...(config.saltnitorBaseUrl !== undefined
+        ? { saltnitorBaseUrl: config.saltnitorBaseUrl }
+        : {}),
+    });
+    for (const registration of registrations) {
+      if (registration.source === "degraded")
+        ui.notify(`saltcode: ${registration.detail}`, "warning");
+    }
 
     // REQ-GATE-001: probe connectivity once, at session open, and route from the answer.
     session.online = await probeConnectivity(runner, ui);
@@ -358,6 +373,9 @@ export default function saltcode(pi: ExtensionAPI): void {
             {
               pi,
               ctx,
+              ...(current.config.providerFallbacks !== undefined
+                ? { configuredFallbacks: current.config.providerFallbacks }
+                : {}),
               onFallback: ({ agent: who, from, to }) =>
                 current.workspace.append(
                   JSON.stringify({
@@ -497,7 +515,40 @@ export default function saltcode(pi: ExtensionAPI): void {
         estimatedInputTokens: estimateTaskTokens(spec),
         aFocusThreshold: current.config.aFocusThreshold ?? 32768,
       });
+      // REQ-MOD-004/005: one local model is resident at a time, so the tier has to be
+      // made resident before inference rather than discovered mid-turn. An OOM refusal
+      // stops the task for a human — the box is healthy and the plan is what must change.
+      const resident = await ensureProfile(profile, {
+        ...(current.config.saltnitorBaseUrl !== undefined
+          ? { baseUrl: current.config.saltnitorBaseUrl }
+          : {}),
+        ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+      });
+      if (!resident.ok && resident.flagHuman) {
+        flagHuman(resident.reason);
+        current.state.task.status = "flagged";
+        pi.appendEntry(ENTRY_TASK, current.state.task);
+        return;
+      }
+      if (!resident.ok) {
+        current.ui.notify(`saltcode: ${resident.reason}`, "warning");
+      }
+
       await routeAgent("builder", { builderProfile: profile }, ctx);
+
+      // REQ-MOD-006: reconcile the turn against the VRAM triangle *after* routing, so the
+      // level Pi actually holds is the one that fits. `mtp_enabled` is opt-in and off by
+      // default (design §6 — Tier A's MTP is finicky until benchmarked on this build).
+      const { adjustments } = reconcileLocalTurn({
+        profile,
+        thinking: pi.getThinkingLevel(),
+        mtpEnabled: current.config.mtpEnabled === true,
+      });
+      for (const adjustment of adjustments) {
+        // Named, never silent: a Builder turn that quietly stopped reasoning is the kind
+        // of degradation nobody attributes to the right cause.
+        current.ui.notify(`saltcode: ${spec.id} — ${adjustment}`, "info");
+      }
 
       const outcome = await runTask(spec, {
         gates,
@@ -569,6 +620,9 @@ export default function saltcode(pi: ExtensionAPI): void {
       {
         pi,
         ctx,
+        ...(current.config.providerFallbacks !== undefined
+          ? { configuredFallbacks: current.config.providerFallbacks }
+          : {}),
         onFallback: ({ agent: who, from, to }) =>
           current.workspace.append(
             JSON.stringify({

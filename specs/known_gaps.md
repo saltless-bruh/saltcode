@@ -789,6 +789,33 @@ container, host untouched)"* is unsatisfied, and 13.3's box is unticked.
 currently closed by subtraction. Anyone reading "Saltcode contains the built-ins" would
 reasonably expect option 1's behaviour.
 
+### - [ ] G-031 — The Auditor's local tier is never `ensure`d
+**Severity:** MED · **Noticed:** Task 11.3 · **Closed by:** whoever owns
+`compute_stability`'s model selection (Task 10.1's module; naturally Task 14 or 20.3) ·
+**Where:** `saltcode_backend/saltcode/tools/compute_stability.py`,
+`extensions/saltcode.ts`
+
+REQ-MOD-004 wants exactly one local model resident, and REQ-MOD-005 says the tier is made
+resident through `POST /v1/ensure` **before inference**. The extension now does that for
+the Builder. It cannot do it for the Auditor: the N-pass judgment runs inside the backend's
+`compute_stability`, which picks its own router section from `--model`, so the extension
+never sees that turn and does not know which section to ensure.
+
+Ensuring a profile the extension is *not* about to use would be worse than not ensuring —
+it would evict whatever is resident, for a turn that then asks for something else.
+
+*Why it matters:* the failure is not a wrong answer, it is a stall. Saltnitor loads the
+section on demand, so today the Auditor's first pass pays a cold load; if the Builder left
+Tier B resident and the Auditor asks for Tier A, the box thrashes between them for three
+passes. On a 12GB card that is the difference between an audit that takes seconds and one
+that takes minutes, and nothing in the pipeline reports it as anything but slowness.
+
+*The fix, and why it belongs to the backend:* `compute_stability` should ensure its own
+section before the first pass and report which one it used, exactly as it already reports
+`escalation`. That is where the model choice lives. Raised rather than worked around,
+because the alternative — having the extension guess the Auditor's section — encodes the
+same choice in two places, which is the failure DD-16 already cost this project once.
+
 ### - [x] G-030 — Two tasks both claim Saltnitor provider registration
 **Severity:** LOW · **Noticed:** Task 13.1 · **Closed:** 2026-08-11 ·
 **Where:** `specs/tasks.md` 13.1 and 11.2
