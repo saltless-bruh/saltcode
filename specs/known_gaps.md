@@ -702,10 +702,44 @@ the tasks that produce them.
 complete until both land, so `pi install` currently registers an extension with
 no skills behind it.
 
-### - [ ] G-029 — Nothing can run a command *inside* the container, so the built-in override refuses instead
-**Severity:** HIGH · **Noticed:** Task 13.3 · **Closed by:** unassigned — needs a
-maintainer decision · **Where:** `extensions/saltcode/builtins.ts`,
-`saltcode_backend/saltcode/harness/sandbox.py` (`run_in_container`), `docs/entrypoints.md`
+### - [x] G-029 — Nothing can run a command *inside* the container, so the built-in override refuses instead
+**Severity:** HIGH · **Noticed:** Task 13.3 · **Closed:** 2026-08-11 ·
+**Where:** `extensions/saltcode/{builtins,contained}.ts`,
+`saltcode_backend/saltcode/tools/contained_exec.py`, `docs/entrypoints.md`
+
+**Closed by option 1, which the maintainer took.** There is now a **fourteenth
+entrypoint**, `saltcode.tools.contained_exec`: argv in, `{stdout, stderr, code}` out, the
+REQ-SEC-002 allowlist re-checked backend-side, every call and every refusal audit-logged.
+It is on the Task 7b roster, so the conformance suite holds it to all fourteen invariants
+without anyone remembering to. Two modes — **exec** for `bash`, and **copy-in** for
+`write`/`edit` whose `cp <staged> <target>` argv is built by the module rather than the
+caller, so a one-entry allowlist authorises exactly that and REQ-SEC-002 is untouched.
+The extension's overrides route through it; they refuse only where no containment backend
+exists at all, which is REQ-SEC-005's rule and the same condition that stops Phase 2.
+
+**REQ-SEC-007 AC1 is now met, and Task 13's Done-when leg is proven rather than argued:**
+`test_a_bash_rm_rf_in_interactive_mode_leaves_the_host_untouched` asserts both halves —
+the command is refused before a container is built, *and* the file it named still exists
+afterwards. Asserting only the exit code would have passed even if the deletion had
+happened. Sixteen tests in `tests/test_task_13_contained_exec.py` plus seven in
+`test/contained.test.mjs`; backend 811 passed, 1 skipped.
+
+**One defect found while testing, and it is worth recording.** The first design took the
+argv as a repeatable `--arg`. `--arg -rf` parses as an *option*, not a value, so
+`rm -rf /` came back as a **usage error** rather than a refusal — worse than it sounds,
+because the command was not refused, it was not *understood*, and the caller saw the wrong
+reason entirely. The channel is now a JSON array (`--argv-json`), which has no such
+ambiguity, and the exact shape that broke is pinned on both sides.
+
+**One thing this deliberately does not claim.** `--sandbox` is the container's writable
+root, and in interactive mode the extension passes the *project* directory — a `write` the
+human asked for has to land in the project. Every other guarantee is unchanged (no
+network, no `$HOME`, no credentials, PID namespace, memory/CPU/time ceilings,
+auto-cleanup), so what interactive mode gives up against Phase 2 is the read-only
+*project*, not containment. Stated in the module docstring and in `docs/entrypoints.md`
+rather than left for someone to discover.
+
+*Original entry:*
 
 REQ-SEC-007 AC1: when the human or any agent invokes `write`/`edit`/`bash`, execution
 SHALL route through the security container, not the raw host. REQ-SEC-001 puts container
@@ -755,9 +789,17 @@ container, host untouched)"* is unsatisfied, and 13.3's box is unticked.
 currently closed by subtraction. Anyone reading "Saltcode contains the built-ins" would
 reasonably expect option 1's behaviour.
 
-### - [ ] G-030 — Two tasks both claim Saltnitor provider registration
-**Severity:** LOW · **Noticed:** Task 13.1 · **Closed by:** Task 11.2, once the overlap is
-adjudicated · **Where:** `specs/tasks.md` 13.1 and 11.2
+### - [x] G-030 — Two tasks both claim Saltnitor provider registration
+**Severity:** LOW · **Noticed:** Task 13.1 · **Closed:** 2026-08-11 ·
+**Where:** `specs/tasks.md` 13.1 and 11.2
+
+**Closed by the adjudication it asked for.** The maintainer took the recommendation:
+**Task 11.2 owns Saltnitor provider registration**, the clause is struck from 13.1, and
+11.2 now says so explicitly so the ownership is visible from the task that does the work
+rather than only from a gap entry. 13.1's box is ticked; `session_start` will call into
+Task 11's module when that task lands.
+
+*Original entry:*
 
 Task 13.1 lists "register Saltnitor models" among `session_start`'s duties. Task 11.2 is
 `pi.registerProvider("saltnitor", {baseUrl, api, models})` with an async `/v1/models`

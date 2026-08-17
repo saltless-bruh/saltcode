@@ -17,7 +17,7 @@
  * (REQ-EXT-014 AC2), so it stays the reference implementation rather than a stub.
  */
 
-/** The thirteen entrypoints, by module name under `saltcode.tools`. */
+/** The fourteen entrypoints, by module name under `saltcode.tools`. */
 export type Entrypoint =
   | "validate_contract"
   | "scope_probe"
@@ -31,7 +31,8 @@ export type Entrypoint =
   | "compact_spec"
   | "calibrate"
   | "read_scoped"
-  | "connectivity";
+  | "connectivity"
+  | "contained_exec";
 
 /** `docs/entrypoints.md` §Exit codes. */
 export const EXIT_POSITIVE = 0;

@@ -44,8 +44,15 @@ ENTRYPOINTS: tuple[str, ...] = (
     "calibrate",
     "read_scoped",
     "connectivity",
+    "contained_exec",
 )
-"""The roster from `specs/tasks.md` 7b.1, verbatim and in its order."""
+"""The roster from `specs/tasks.md` 7b.1, verbatim and in its order.
+
+`contained_exec` is the fourteenth, added 2026-08-11 for **G-029**: REQ-SEC-007 AC1 needs
+the built-in `write`/`edit`/`bash` routed through the container, and 7b.1's original list
+covered design §5.3's twelve LLM-facing tools plus `connectivity` — it had no reason to
+notice that the extension also needs an arbitrary contained command. It is held to every
+invariant here automatically, which is the point of parametrising over the roster."""
 
 VALID_EXIT_CODES = {EXIT_OK, EXIT_VERDICT_NEGATIVE, EXIT_USAGE, EXIT_ERROR}
 
@@ -82,10 +89,11 @@ def test_the_roster_matches_the_tools_package() -> None:
     )
 
 
-def test_the_roster_is_the_thirteen_task_7b_names() -> None:
-    """7b.1 names them explicitly; this pins the count so a silent drop is visible."""
-    assert len(ENTRYPOINTS) == 13
-    assert len(set(ENTRYPOINTS)) == 13
+def test_the_roster_is_the_fourteen_entrypoint_names() -> None:
+    """7b.1 names thirteen; `contained_exec` is the fourteenth (G-029). Pinned so a
+    silent drop — or a silent addition that skipped this file — is visible."""
+    assert len(ENTRYPOINTS) == 14
+    assert len(set(ENTRYPOINTS)) == 14
 
 
 # ------------------------------------------------------- invariant 1: runnable at all
@@ -194,6 +202,7 @@ REQUIRED_ARG_PROBES: dict[str, tuple[str, ...]] = {
     "calibrate": (),
     "read_scoped": (),
     "connectivity": (),
+    "contained_exec": (),
 }
 """Bare invocations. Tools with required arguments must refuse; the two that have none
 (`scope_probe`, `connectivity`) legitimately run, which is why this asserts the code is

@@ -409,7 +409,7 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 
 ## Task 11 — Saltnitor + DeepSeek/Qwen as registered providers  ·  deps: 2, 13  ·  [CHANGED]
 - [ ] 11.1 `pi.registerProvider("deepseek", { api:"openai-completions"|… , models:[v4-flash, v4-pro], apiKey:"$DEEPSEEK_API_KEY" })` and optional Qwen provider.
-- [ ] 11.2 `pi.registerProvider("saltnitor", { baseUrl:"http://127.0.0.1:8765/v1", api:"openai-completions", models:[A_STD, A_FOCUS, B] })`; prefer an **async factory** that fetches `/v1/models`; degrade gracefully if unreachable.
+- [ ] 11.2 `pi.registerProvider("saltnitor", { baseUrl:"http://127.0.0.1:8765/v1", api:"openai-completions", models:[A_STD, A_FOCUS, B] })`; prefer an **async factory** that fetches `/v1/models`; degrade gracefully if unreachable. **This step is the sole owner of Saltnitor provider registration** (maintainer, 2026-08-11 — G-030); Task 13.1 wires the lifecycle and calls into it.
 - [ ] 11.3 Before a Tier-B turn, `ensure` the Saltnitor router section (`POST /v1/ensure {profile:"B"}`); on oracle OOM refusal → FLAG HUMAN (don't crash). Enforce sequential Builder/Auditor (one resident). Select A_STD vs A_FOCUS by task input token count (default 32K). VRAM triangle: A_FOCUS disables high-thinking; MTP opt-in.
 - [ ] 11.4 Offline: route ALL Phase-1 agents to a Tier-B Saltnitor model via `pi.setModel`; keep Auditor faithfulness local.
 - [ ] 11.5 Read `mtp_enabled` and `a_focus_threshold` from `saltcode.toml [local]`; apply to profile selection (A_STD vs A_FOCUS, MTP on/off) in the extension's model-routing handler. Implement the per-turn provider failover chain (configured → `[providers.fallback]` → Saltnitor Tier B → FLAG HUMAN), logging each fallback.
@@ -425,9 +425,9 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 
 ## Task 13 — The TypeScript extension (the bridge)  ·  deps: 7b, 7  ·  [REPLACED]
 > Replaces the old Typer CLI + Textual TUI entirely. This is the core integration piece.
-- [ ] 13.1 **Factory + lifecycle:** `export default function (pi)`; `session_start` (replay `ctx.sessionManager.getEntries()` → rebuild sprint/budget/task state; probe connectivity; register Saltnitor models); `session_shutdown` cleanup; `resources_discover` contributes skill/prompt paths if not bundled.
+- [x] 13.1 **Factory + lifecycle:** `export default function (pi)`; `session_start` (replay `ctx.sessionManager.getEntries()` → rebuild sprint/budget/task state; probe connectivity); `session_shutdown` cleanup; `resources_discover` contributes skill/prompt paths if not bundled. *(Saltnitor provider registration struck 2026-08-11 — Task 11.2 owns it; see G-030.)*
 - [x] 13.2 **Tool registration (bridge):** `pi.registerTool` for each `saltcode_*` capability (TypeBox params; `StringEnum` for enums) whose `execute` talks to the **backend daemon** (Task 19) over stdio/socket, falling back to `pi.exec("python", ["-m","saltcode.tools.<x>", …])` if the daemon is down.
-- [ ] 13.3 **Access control + built-in override:** `pi.on("tool_call")` blocks `tests/**` writes, non-allowlisted commands, and out-of-scope scoped reads (`{ block:true, reason }`, `isToolCallEventType`); **override the built-in `write`/`edit`/`bash`** with same-named tools that route through the container (Task 3.1) so no live built-in bypasses containment in interactive mode; per-agent tool access comes from the sub-agent definitions (Task 7) + `pi.setActiveTools` at the top level.
+- [x] 13.3 **Access control + built-in override:** `pi.on("tool_call")` blocks `tests/**` writes, non-allowlisted commands, and out-of-scope scoped reads (`{ block:true, reason }`, `isToolCallEventType`); **override the built-in `write`/`edit`/`bash`** with same-named tools that route through the container (Task 3.1) so no live built-in bypasses containment in interactive mode; per-agent tool access comes from the sub-agent definitions (Task 7) + `pi.setActiveTools` at the top level.
 - [x] 13.4 **Model/thinking routing:** per agent, `ctx.modelRegistry.find(...)` → `pi.setModel` (handle `false` → fallback chain, REQ-EXT-010) + `pi.setThinkingLevel(level)` per design §6; update status on `model_select`/`thinking_level_select`.
 - [x] 13.5 **State:** `pi.appendEntry` for sprint/budget/task; budget tracker (shared ≤3, Tier-A sub-cap 2, `spec_defect` free) + loop counters (A≤2/P≤3) implemented here, observable, never silently reset.
 - [x] 13.6 **Compaction:** `pi.on("session_before_compact")` preserves the active `## HARD CONSTRAINTS` in any summary (or cancels).
@@ -438,8 +438,8 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 - **Satisfies:** REQ-EXT-003..015, REQ-ORC-002..007, REQ-FAIL-001..004, REQ-SEC-004/006/007, REQ-AUD-002 (escalation), REQ-CAD-003.
 - **Done when:** `/sprint` drives a full sprint pausing only at the four decisions; each Phase-1 agent runs in an isolated sub-agent context; a `tests/**` write and a non-allowlisted command are blocked at `tool_call`; a built-in `bash rm -rf` in interactive mode is contained (routed to the container, host untouched); budget exhaustion flags human; 2 Tier-A failures → 3rd on Tier B; the live tree is unmodified until Auditor `pass`; `--dry-run` runs nothing and writes nothing outside `.saltcode/`; state survives `/resume`.
 
-- **13.2, 13.4, 13.5, 13.6, 13.7, 13.9 done (2026-08-11); 13.1, 13.3, 13.8, 13.10 and
-  Task 13's own box stay unticked.** The extension is built: `extensions/saltcode.ts` is the
+- **13.1–13.7 and 13.9 done (2026-08-11); 13.8, 13.10 and Task 13's own box stay
+  unticked.** The extension is built: `extensions/saltcode.ts` is the
   factory and the decisions live in `extensions/saltcode/*.ts` as pure functions, so the
   parts that must be provable without a running Pi are. **75 new tests** across five
   `node --test` suites (86 in the extension lane with the Task 7 contract test); `tsc
@@ -454,31 +454,43 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
   runtime through jiti, and Pi's own `.d.ts` files are written the same way.
 
   **Done-when legs, one by one.** Verified: `tests/**` writes and non-allowlisted commands
-  blocked at `tool_call`; budget exhaustion flags human; 2 Tier-A failures → 3rd on Tier B;
-  the live tree untouched until the Auditor passes (the loop's gate order is asserted);
-  `--dry-run` executes nothing and writes only inside `.saltcode/`. Unverified: `/sprint`
-  end to end and each Phase-1 agent's isolated spawn both need a live model — same wall as
-  **G-028** — and `/resume` state survival is proven as a unit-level replay, not through a
-  real session restart. **Not satisfied: "a built-in `bash rm -rf` is contained."**
+  blocked at `tool_call`; **a built-in `bash rm -rf` in interactive mode contained, host
+  untouched**; budget exhaustion flags human; 2 Tier-A failures → 3rd on Tier B; the live
+  tree untouched until the Auditor passes (the loop's gate order is asserted); `--dry-run`
+  executes nothing and writes only inside `.saltcode/`. **Two legs remain unverified and
+  keep the box unticked:** `/sprint` end to end, and each Phase-1 agent's isolated spawn —
+  both need a live model, the same wall as **G-028**. `/resume` state survival is proven as
+  a unit-level replay rather than through a real session restart.
 
-  > **13.3 is half done, and the missing half is a real hole — G-029.** The `tool_call`
-  > handler is complete and tested. The built-in override is registered on Pi's own
-  > `create{Bash,Write,Edit}ToolDefinition` factories, so schemas and renderers stay the
-  > built-ins', and the allowlist plus the `tests/**` check run inside it. But REQ-SEC-007
-  > AC1 says execution SHALL route *through the container*, the container is spawned by the
-  > backend (REQ-SEC-001), and **none of the thirteen CLI entrypoints runs an arbitrary
-  > allowlisted command inside it** — `harness/sandbox.py::run_in_container` has no CLI
-  > surface. The overrides therefore take an injected `ContainedExec` and, with none
-  > supplied, **refuse**. Nothing runs uncontained, which is REQ-SEC-005's own rule when
-  > containment is unavailable; but refusing removes the capability rather than containing
-  > it, so the leg is not met and the box is not ticked. See G-029 for the options.
+  > **13.3 completed 2026-08-11, after the maintainer took the G-029 recommendation.**
+  > The `tool_call` handler was always complete; what was missing was the container. There
+  > is now a **fourteenth entrypoint**, `saltcode.tools.contained_exec` — argv in,
+  > `{stdout, stderr, code}` out, the REQ-SEC-002 allowlist re-checked backend-side,
+  > audit-logged, and held to every Task 7b conformance invariant automatically because
+  > that suite parametrises over its roster. It carries two modes: **exec** for `bash`, and
+  > **copy-in** for `write`/`edit`, whose argv (`cp <staged> <target>`) is built by the
+  > module rather than the caller, so a one-entry allowlist authorises exactly it. The
+  > overrides now route through it and refuse only where no containment backend exists at
+  > all — REQ-SEC-005's rule, and the same condition that stops Phase 2.
+  >
+  > **The Done-when leg is now proven, not argued.**
+  > `test_a_bash_rm_rf_in_interactive_mode_leaves_the_host_untouched` asserts both halves:
+  > `rm` is refused before a container is built, *and* the file it named still exists
+  > afterwards. Asserting only the exit code would have passed even if the deletion had
+  > happened.
+  >
+  > **One defect found while testing, and it is the interesting one.** The first design
+  > took the argv as a repeatable `--arg`; `--arg -rf` parses as an *option*, not a value,
+  > so `rm -rf /` came back as a **usage error** rather than a refusal. That is worse than
+  > it looks — the command is not refused, it is not understood, and the caller sees the
+  > wrong reason. The channel is now a JSON array (`--argv-json`), which has no such
+  > ambiguity, and `test/contained.test.mjs` pins the exact shape that broke.
 
-  > **13.1 is unticked over one clause: "register Saltnitor models."** Replay, the
-  > connectivity probe, `session_shutdown` and `resources_discover` are done. Provider
-  > registration is **Task 11.2**'s own sub-step (`pi.registerProvider("saltnitor", …)`
-  > with an async `/v1/models` factory), and Task 11 `deps: 2, 13`. Doing it here would be
-  > Task 11's work inside Task 13. Raised in G-030 rather than resolved by guessing which
-  > task owns it.
+  > **13.1 completed 2026-08-11.** Replay, the connectivity probe, `session_shutdown` and
+  > `resources_discover` were already done; the maintainer struck "register Saltnitor
+  > models" from this step and gave it to **Task 11.2**, which specifies it in more detail
+  > (async `/v1/models` factory, graceful degradation). `session_start` will call into
+  > Task 11's module. G-030 closed by decision.
 
   > **13.8 and 13.10 are implemented and unticked for the same reason.** `/sprint`,
   > `/review`, `/status` and `/cost` are registered; Phase 1 spawns Scout → Architect →
@@ -496,8 +508,9 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
   > daemon client (Task 19.2 — `pi.exec` is the documented fallback and is what runs today).
 
   > **Verification:** `npm run typecheck` · `npm run lint` · `npm run test:agents`
-  > (86 passed) · `../.venv/bin/ruff check .` · `../.venv/bin/pytest -q` (787 passed,
-  > 1 skipped). All 2026-08-11.
+  > (**93 passed**) · `../.venv/bin/ruff check .` · `../.venv/bin/pyright` ·
+  > `../.venv/bin/pytest -q` (**811 passed, 1 skipped** — the skip is G-013's honest
+  > `limits_enforced=false` on this systemd-less host). All 2026-08-11.
 
 ## Task 13b — Package as a Pi Package (manifest + prompts + publish)  ·  deps: 13  ·  [NEW]
 - [ ] 13b.1 Author prompt templates `prompts/{sprint,phase1,phase2,review}.md` (frontmatter `description` + `argument-hint`; `$@`/`$1` args) as reusable instruction blocks for interactive mode and `/sprint` composition.

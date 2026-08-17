@@ -48,6 +48,7 @@ import {
   retainsAllConstraints,
   spliceConstraints,
 } from "./saltcode/constraints.ts";
+import { createContainedExec } from "./saltcode/contained.ts";
 import { createGates } from "./saltcode/gates.ts";
 import { runTask, type TaskSpec } from "./saltcode/phase2.ts";
 import { applyRoute, describeRoute } from "./saltcode/routing.ts";
@@ -164,11 +165,19 @@ export default function saltcode(pi: ExtensionAPI): void {
 
     // 13.3 — the contained built-ins. Registered here rather than at factory time because
     // they need ctx.cwd, and re-registering on reload is how they survive `/reload`.
+    //
+    // The writable root is the project: in interactive mode a `write` the human asked for
+    // has to land in the project, and everything else the container guarantees — no
+    // network, no $HOME, no credentials, PID namespace, limits — is unchanged. Phase 2's
+    // own writes never come through here; they arrive as a Builder diff through
+    // saltcode_sandbox_apply, whose writable root is the disposable worktree.
     registerContainedBuiltins(pi, {
       cwd: ctx.cwd,
-      // Deliberately absent: see the header of saltcode/builtins.ts. Until a contained-exec
-      // entrypoint exists, mutating built-ins refuse rather than run on the host.
-      containedExec: undefined,
+      containedExec: createContainedExec({
+        runner: () => requireSession().runner,
+        workspace,
+        writableRoot: () => ctx.cwd,
+      }),
       allowedCommands: config.allowedCommands,
       onRefusal: (tool, reason) => {
         workspace.append(

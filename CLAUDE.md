@@ -90,22 +90,24 @@ workspace/         # target projects Saltcode operates on
   (N-pass Auditor stability, anti-gaming heuristics, `apply_live`, scoped read) ·
   Task 12 (Spec Compactor) · Task 14b (measured-then-fixed threshold calibration) ·
   Task 7b (the thirteen CLI entrypoints + `docs/entrypoints.md` + the conformance suite).
-  **787 backend tests pass locally, 1 skips** (G-013's honest `limits_enforced=false` on a
-  systemd-less host). `ruff` + `pyright --strict` clean.
+  **811 backend tests pass locally, 1 skips** (G-013's honest `limits_enforced=false` on a
+  systemd-less host). `ruff` + `pyright --strict` clean. Track A now also carries the
+  **fourteenth entrypoint**, `contained_exec` (added by Task 13.3 for G-029).
 - **Track B is under way.** **Task 7** (sub-agent definitions) is done except 7.2b/7.3/7.3b
   — the mechanism is verified through `pi-subagents@0.40.0`'s own loader, the behaviour
   needs a live model (G-028). **Task 13** (the extension) is built: the factory is
   `extensions/saltcode.ts` and the decisions live as pure functions in
   `extensions/saltcode/*.ts`, so the privacy, write-scope, budget and routing rules are
-  provable without a running Pi. **13.2, 13.4, 13.5, 13.6, 13.7 and 13.9 are ticked;
-  13.1, 13.3, 13.8, 13.10 and Task 13's box are not** — see the notes under Task 13 in
-  `specs/tasks.md` for exactly which leg is open on each. Extension lane: `tsc --noEmit`
-  and `biome` clean, **86 tests** (`npm run test:agents`).
-- **Two open questions for the maintainer**, both raised rather than guessed:
-  **G-029** — nothing exposes `run_in_container` as a CLI entrypoint, so the contained
-  `write`/`edit`/`bash` overrides currently *refuse* instead of routing; REQ-SEC-007 AC1 is
-  unmet, and the recommended fix is a `contained_exec` entrypoint. **G-030** — Tasks 13.1
-  and 11.2 both claim Saltnitor provider registration; 11.2 should own it.
+  provable without a running Pi. **13.1–13.7 and 13.9 are ticked; 13.8, 13.10 and Task 13's
+  box are not** — both open steps are implemented and unit-tested, and both wait on a live
+  model (G-028), which is also the only thing keeping Task 13's box unticked. Extension
+  lane: `tsc --noEmit` and `biome` clean, **93 tests** (`npm run test:agents`).
+- **Both open questions were answered (maintainer, 2026-08-11) and are closed.**
+  **G-029** — `saltcode.tools.contained_exec` now exposes the container as a CLI
+  entrypoint, so the built-in `write`/`edit`/`bash` overrides route through it and
+  REQ-SEC-007 AC1 is met; the `bash rm -rf` Done-when leg is proven by a test that checks
+  the host file survives, not just the exit code. **G-030** — Task 11.2 owns Saltnitor
+  provider registration; the clause is struck from 13.1.
 - **Next:** the rest of Track B — **{6, 8, 11}** build on the extension core, then 13b,
   then 18. Build order is at the bottom of `specs/tasks.md`.
 - **Deployment (confirmed 2026-07-28):** everything — Saltcode, Saltnitor, Docker,

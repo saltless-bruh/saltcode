@@ -11,7 +11,7 @@ That makes this document a **contract, not a description**: the extension's tool
 definitions are written against the argument names and JSON keys below, and a change here
 is a change to the bridge.
 
-Three invariants hold for all thirteen. They are asserted mechanically for every
+Three invariants hold for all fourteen. They are asserted mechanically for every
 entrypoint in `tests/test_task_7b_entrypoints.py`, which is what closes **G-006** —
 before it, the exit-code scheme was a convention that happened to hold.
 
@@ -69,7 +69,7 @@ routing signal in words where the exit code is the same in numbers.
 
 ---
 
-## The thirteen
+## The fourteen
 
 ### `validate_contract` — task 1.7
 Validate a typed contract against its pydantic model and the Output-Length Enforcer.
@@ -261,6 +261,49 @@ Payload: `{tool, ok, verdict, task_id, path, files_affected[], bytes?, content?,
 scope comes from the contract; a backend re-check that accepts the caller's copy of the
 allowed list is not an independent check (`.claude/rules/privacy-boundary.md`). A refusal
 payload carries no `content` key at all.
+
+### `contained_exec` — task 13.3 (added for G-029)
+Run one allowlisted command — or land one file — **inside the security container**. This is
+the channel REQ-SEC-007 AC1 needs: Pi's built-in `write`/`edit`/`bash` are overridden by
+the extension, and each override routes here rather than touching the host.
+
+The other thirteen each run one *specific* contained job. This one takes the caller's argv,
+which is why the allowlist is the whole authorisation and there is deliberately no way to
+extend it from the command line.
+
+| Argument | Required | Meaning |
+|---|---|---|
+| `--sandbox PATH` | yes | The container's writable root (see below). |
+| `--repo PATH` | no | Workspace whose `.saltcode/audit_log.jsonl` receives the record (default: `--sandbox`). |
+| `--arg WORD` | exec mode | One argv element; repeat for each. |
+| `--write-path PATH` | copy-in mode | Destination, relative to `--sandbox`. |
+| `--content-file PATH` | copy-in mode | The bytes to land there. |
+| `--timeout SECONDS` | no | Override the time ceiling only. |
+
+Exactly one mode per invocation: `--arg`, or both `--write-path` and `--content-file`.
+Neither or both is exit `2`.
+
+Payload: `{tool, ok, mode, verdict, exit_code, stdout, stderr, backend, container_id,
+refused, timed_out, limits_enforced, detail}` — plus `argv` (exec) or `write_path`/`bytes`
+(copy-in) · `0` the command exited 0 · `1` it exited non-zero, was refused by the
+allowlist, timed out, or the write path was rejected · `3` **no containment backend**.
+
+**A refusal is exit 1, an absent container is exit 3**, and the difference matters.
+"Not permitted" is a normal outcome the caller routes on; "there is nowhere safe to run
+this" is REQ-SEC-005's stop condition and must never read as a verdict.
+
+**Copy-in does not widen the allowlist.** Its argv is `cp <content-file> <target>`, built
+by the module, and a one-entry allowlist authorises exactly that for that call. The
+allowlist exists to constrain *caller-supplied* commands; here the caller supplies a
+destination and some bytes, both checked — the path is confined to `--sandbox` after
+resolution (so `..` and symlinks cannot escape) and `tests/**` is refused outright.
+
+**What `--sandbox` means.** It is the writable root. In Phase 2 that is the disposable
+worktree, so the live tree is untouched. In interactive mode the extension passes the
+project directory, because a `write` the human asked for has to land in the project. Every
+other container guarantee is unchanged either way — no network, no `$HOME`, no
+credentials, isolated PID namespace, memory/CPU/time ceilings, auto-cleanup. What
+interactive mode gives up against Phase 2 is the read-only *project*, not containment.
 
 ### `connectivity` — task 2.3
 The online/offline probe that selects the Phase-1 tier (REQ-MOD-003, design §12).
