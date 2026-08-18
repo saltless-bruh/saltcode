@@ -913,6 +913,54 @@ history. If a project wants the artifacts versioned it commits them by hand — 
 right way round, since committing them on every checkpoint would put a churning directory
 in every diff a human reviews.
 
+### - [ ] G-036 — The cached-prefix cost model has still never been measured
+**Severity:** MED · **Noticed:** Task 6.3 · **Closed by:** the first live sprint against a
+real provider (Task 14 end-to-end, or 20.4) · **Where:**
+`extensions/saltcode/prefix.ts::observePayloadPrefix`, `extensions/saltcode.ts`
+(`before_provider_request`), `specs/design.md` §15
+
+design §15 says its own numbers are provisional, in its own words: prefix caching is
+provider-side and keyed on the **serialized request prefix**, which Pi assembles — it
+injects tool schemas around our content, and `getSystemPrompt()` does not reflect the final
+payload — so *"the 74% figure is a **model, not a measurement**: it must be validated
+empirically via `pi.on("before_provider_request")`"*.
+
+Task 6 built the instrument that validation needs — `observePayloadPrefix` hashes the
+cacheable head of the real payload, the `--prefix-debug` flag turns it on, and
+`.saltcode/prefix_debug.jsonl` records every reading. It is unit-tested against both
+provider payload shapes and the unrecognised one. **It has never produced a reading**,
+because there is no provider on this box.
+
+*Why it matters:* a byte-stable `systemPrompt` from this extension is *necessary* for a
+cache hit and nowhere near sufficient. If Pi puts anything variable ahead of segments 1–3 —
+a tool block that reorders, a timestamp, a session id — the provider's cache misses on
+every turn and Task 6 buys nothing, while every gate and test in this repo still passes.
+The instrument's `changed: true` on a turn `decidePrefix` reported as `reused` is exactly
+that signal, and until someone runs it the §18 cost estimates rest on an assumption.
+
+*What to do with it:* run one sprint with `--prefix-debug`, read the jsonl, and either
+confirm §15's model or amend §15 and §18 with what was actually observed. This is cheap —
+one flag on a run that was going to happen anyway — and it is the difference between a
+documented economics claim and a guess.
+
+### - [ ] G-037 — Task 6's byte-diff is proven at the function, not in a live session
+**Severity:** LOW · **Noticed:** Task 6.2 · **Closed by:** Task 14 (end-to-end), same live
+model that closes G-028 · **Where:** `extensions/saltcode/prefix.ts`,
+`test/prefix.test.mjs`
+
+REQ-GLB-004 AC1's byte-diff is asserted against `decidePrefix`, which is where the
+guarantee is actually implemented — including the adversarial case where all three sources
+are mutated between calls and the output must not move. What is *not* exercised is the
+handler that feeds it: `before_agent_start` → `decidePrefix` → `{ systemPrompt }`, running
+inside a real Pi session across two real turns.
+
+*Why it matters:* less than G-036, and it is listed separately for that reason. The handler
+is a typechecked pass-through with no branching beyond the reuse check, so the plausible
+failure is not in its logic — it is that `before_agent_start` fires somewhere other than
+where this assumes, or that Pi's chaining of multiple extensions' `systemPrompt` returns
+(the API notes they are chained) puts another extension's bytes inside our frozen prefix.
+Neither is visible without a running Pi. Same family as **G-028**.
+
 ### - [x] G-030 — Two tasks both claim Saltnitor provider registration
 **Severity:** LOW · **Noticed:** Task 13.1 · **Closed:** 2026-08-11 ·
 **Where:** `specs/tasks.md` 13.1 and 11.2

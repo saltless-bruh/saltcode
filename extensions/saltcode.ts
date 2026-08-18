@@ -13,6 +13,8 @@
  *   13.4  setModel / setThinkingLevel routing per design §6        → saltcode/routing.ts
  *   13.5  appendEntry state: sprint, budget, per-task counters     → saltcode/state.ts
  *   13.6  session_before_compact — preserve ## HARD CONSTRAINTS    → saltcode/constraints.ts
+ *    6.1  before_agent_start — the front-loaded stable prefix      → saltcode/prefix.ts
+ *    6.3  before_provider_request — prefix-stability instrument     → saltcode/prefix.ts
  *   13.7  ctx.ui widgets for phase, task deck, gate pipeline, cost → saltcode/ui.ts
  *   13.8  registerCommand: /sprint /review /status /cost           → saltcode/sprint.ts
  *   13.9  registerFlag: dry-run, builder-escalation
@@ -24,6 +26,7 @@
  */
 
 import {
+  type BeforeAgentStartEvent,
   type ExtensionAPI,
   type ExtensionContext,
   generateSummary,
@@ -51,6 +54,16 @@ import {
 import { createContainedExec } from "./saltcode/contained.ts";
 import { createGates } from "./saltcode/gates.ts";
 import { runTask, type TaskSpec } from "./saltcode/phase2.ts";
+import {
+  DEFAULT_NOTES_SESSION,
+  decidePrefix,
+  describePrefix,
+  FROZEN_NOTES_PATH,
+  type FrozenPrefix,
+  fingerprintPromptOptions,
+  observePayloadPrefix,
+  parseFrozenNotes,
+} from "./saltcode/prefix.ts";
 import { ensureProfile, reconcileLocalTurn, registerProviders } from "./saltcode/providers.ts";
 import { applyRoute, describeRoute } from "./saltcode/routing.ts";
 import { openSprint, readTaskOrder, runPhase1 } from "./saltcode/sprint.ts";
@@ -76,6 +89,10 @@ interface Session {
   online: boolean;
   trusted: boolean;
   flag?: string;
+  /** Task 6: the frozen prefix, carried turn to turn so its bytes cannot drift. */
+  prefix: FrozenPrefix | null;
+  /** 6.3: the last observed payload-prefix hash. Only set when the debug flag is on. */
+  payloadHash: string | null;
 }
 
 export default function saltcode(pi: ExtensionAPI): void {
@@ -93,6 +110,15 @@ export default function saltcode(pi: ExtensionAPI): void {
     description:
       "Online only, default off (Task 16): allow one DeepSeek Flash rebuild of a task that " +
       "has failed all three local attempts, before flagging a human.",
+    type: "boolean",
+    default: false,
+  });
+
+  pi.registerFlag("prefix-debug", {
+    description:
+      "Hash the cacheable head of every provider request to " +
+      "`.saltcode/prefix_debug.jsonl` and warn when it moves. The only way to check design " +
+      "§15's cached-prefix cost model against what the provider actually received.",
     type: "boolean",
     default: false,
   });
@@ -162,6 +188,8 @@ export default function saltcode(pi: ExtensionAPI): void {
       board: { gates: {} },
       online: false,
       trusted,
+      prefix: null,
+      payloadHash: null,
     };
 
     // 13.3 — the contained built-ins. Registered here rather than at factory time because
@@ -254,6 +282,84 @@ export default function saltcode(pi: ExtensionAPI): void {
         "refusals.jsonl",
       );
       return { block: true, reason: decision.reason };
+    }
+    return undefined;
+  });
+
+  // ------------------------------------------ 6.1/6.2 the front-loaded stable prefix
+  //
+  // `[system | design.md | frozen notes | per-call delta]` (REQ-PFX-001). Segments 1–3 go
+  // back as `systemPrompt`; segment 4 is the turn's own input and is left alone.
+  //
+  // The decision is `decidePrefix`, which is pure — this handler only supplies the three
+  // sources and carries the frozen record forward. That split is what makes REQ-GLB-004's
+  // byte-diff testable without a running Pi: the guarantee is a property of the function,
+  // not of the wiring.
+  pi.on("before_agent_start", (event: BeforeAgentStartEvent, _ctx: ExtensionContext) => {
+    const current = session;
+    if (current === undefined) return undefined;
+
+    const decision = decidePrefix(current.prefix, {
+      fingerprint: fingerprintPromptOptions(event.systemPromptOptions),
+      // An Architect re-loop is what re-emits design.md, so it — not a Planner re-loop —
+      // is the Evaluator pass boundary segment 2's lifetime is measured in (AC2).
+      evaluatorPass: current.state.sprint?.loops.architect ?? 0,
+      sources: {
+        systemPrompt: event.systemPrompt,
+        design: current.workspace.read("design.md"),
+        notes: parseFrozenNotes(
+          current.workspace.read(...FROZEN_NOTES_PATH),
+          DEFAULT_NOTES_SESSION,
+        ),
+      },
+    });
+
+    current.prefix = decision.frozen;
+
+    // 6.1 says to return `{ systemPrompt, message }`, and the message is returned only on
+    // a rotation. Pi converts a `custom` message into a **user** message in the provider
+    // payload (`messages.js`, `case "custom"`) whatever its `display` flag, so one emitted
+    // every turn would add billed tokens straight after the cached prefix — the opposite
+    // of what this handler exists to do — and would perturb the conversation the agent
+    // sees. Design §15's segment 4 is the turn's own input, which is already there. So the
+    // message carries the one thing nothing else can say: the cached prefix just moved,
+    // and this turn is priced accordingly.
+    if (decision.reused) return { systemPrompt: decision.prefix };
+
+    return {
+      systemPrompt: decision.prefix,
+      message: {
+        customType: "saltcode:prefix",
+        content: describePrefix(decision),
+        display: true,
+        details: decision.rotated.join("\n"),
+      },
+    };
+  });
+
+  // ------------------------------- 6.3 (debug) does the real payload prefix hold?
+  //
+  // Registered unconditionally but inert unless `--prefix-debug` is set: design §15 wants
+  // this measured, and an instrument nobody can switch on measures nothing — but one left
+  // running on every provider request is a cost of its own.
+  pi.on("before_provider_request", (event, _ctx) => {
+    const current = session;
+    if (current === undefined || pi.getFlag("prefix-debug") !== true) return undefined;
+
+    const observation = observePayloadPrefix(event.payload, current.payloadHash);
+    current.payloadHash = observation.hash;
+    current.workspace.append(
+      JSON.stringify({ at: new Date().toISOString(), ...observation }),
+      "prefix_debug.jsonl",
+    );
+    if (observation.changed) {
+      current.ui.notify(
+        `Prefix debug: the provider payload's cacheable head moved (${observation.source}, ` +
+          `${observation.bytes}B). If the extension reported the prefix as reused this turn, ` +
+          "Pi changed something ahead of segments 1-3 and the cached-prefix cost model does " +
+          "not hold as written (design §15).",
+        "warning",
+      );
     }
     return undefined;
   });

@@ -110,15 +110,19 @@ workspace/         # target projects Saltcode operates on
   **Task 11** (registered providers) is built — 11.1, 11.2, 11.4, 11.5 are ticked;
   **11.3 is not**, because the Auditor's tier is never `ensure`d from the extension
   (G-031) and the residency legs need a live Saltnitor.
+  **Task 6** (the front-loaded stable prefix) is built — **6.1 and 6.2 are ticked**;
+  **6.3 is not**: the `--prefix-debug` instrument exists and is unit-tested but has never
+  produced a reading against a real provider, so design §15's cached-prefix economics stay
+  modeled rather than measured (**G-036**).
 - **Both open questions were answered (maintainer, 2026-08-11) and are closed.**
   **G-029** — `saltcode.tools.contained_exec` now exposes the container as a CLI
   entrypoint, so the built-in `write`/`edit`/`bash` overrides route through it and
   REQ-SEC-007 AC1 is met; the `bash rm -rf` Done-when leg is proven by a test that checks
   the host file survives, not just the exit code. **G-030** — Task 11.2 owns Saltnitor
   provider registration; the clause is struck from 13.1.
-- **Next:** the rest of Track B — **{6, 8}** build on the extension core (11 is built),
-  then 13b, then **18**, which is now unblocked: it deps `13, 17` and both have landed.
-  Build order is at the bottom of `specs/tasks.md`.
+- **Next:** **Task 8** (the cache ladder + Phase-Gate orchestration) is the last of
+  `{6, 8, 11}`; then 13b, then **18**, which Task 17 unblocked. Build order is at the
+  bottom of `specs/tasks.md`.
 - **Deployment (confirmed 2026-07-28):** everything — Saltcode, Saltnitor, Docker,
   the embedding endpoint — runs on **one machine, this one**. The privacy boundary
   is therefore the box: only loopback counts as local, and a LAN address is off-box.

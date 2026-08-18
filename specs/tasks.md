@@ -401,11 +401,64 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
   > it was wrong, and only re-checking caught that.
 
 ## Task 6 — Prefix assembly in `before_agent_start`  ·  deps: 5, 7, 13  ·  [CHANGED]
-- [ ] 6.1 In `before_agent_start`, assemble `[system(active agent) | design.md | frozen notes | per-call delta]`; return `{ systemPrompt, message }`. Read `event.systemPromptOptions` to respect user config. Pull frozen notes + design.md from the backend/Code-Wiki.
-- [ ] 6.2 Guarantee segments 1+3 byte-stable within a session and segment 2 byte-stable within an Evaluator pass.
+- [x] 6.1 In `before_agent_start`, assemble `[system(active agent) | design.md | frozen notes | per-call delta]`; return `{ systemPrompt, message }`. Read `event.systemPromptOptions` to respect user config. Pull frozen notes + design.md from the backend/Code-Wiki.
+- [x] 6.2 Guarantee segments 1+3 byte-stable within a session and segment 2 byte-stable within an Evaluator pass.
 - [ ] 6.3 (Debug) optionally inspect `before_provider_request` payloads to verify cache-prefix stability.
 - **Satisfies:** REQ-PFX-001, REQ-GLB-004.
 - **Done when:** a byte-diff of segments 1–3 across two calls in one session is empty; segment 2 is stable within a pass and may change across a re-loop.
+
+  > **The freeze re-emits bytes; it does not re-derive them.** REQ-GLB-004 AC1 asks for an
+  > *empty byte-diff*, which is a stronger claim than "the same files were read".
+  > `event.systemPrompt` is assembled by Pi and design §15 says outright the extension
+  > cannot see the final payload; the notes file can be rewritten mid-session by a backend
+  > call. So the first turn captures segments 1–3 and every later turn returns **those exact
+  > strings**. `test("a wobbling system prompt or notes file cannot move the frozen bytes")`
+  > mutates all three sources between calls and demands the output not move — a test that
+  > re-derivation fails and re-emission passes.
+
+  > **The freeze is keyed on `systemPromptOptions`, not held forever.** Freezing segment 1
+  > unconditionally would eventually describe a toolset that is no longer registered — a
+  > correctness hazard traded for a cost saving, which is the wrong way round.
+  > `fingerprintPromptOptions` hashes what Pi says it built the prompt *from* (6.1's "read
+  > `event.systemPromptOptions` to respect user config"): same inputs → re-emit the frozen
+  > bytes, different inputs → rotate and say why. It hashes the inputs structurally rather
+  > than the rendered prompt, so a re-render that reorders something is not read as a
+  > config change while a real change is.
+
+  > **The Evaluator pass boundary is the *Architect* re-loop count.** A re-loop to the
+  > Architect is what re-emits `design.md` (REQ-GLB-004 AC2); a Planner re-loop does not
+  > touch it, so it is deliberately not a pass boundary. On a pass change only segment 2 is
+  > rebuilt — 1 and 3 keep their frozen bytes, so their diff across the whole session stays
+  > empty *through* a re-loop, which is the case a naive "re-read everything on change"
+  > would break. AC3 (a fresh project's first Scout call has no segment 2) is an empty
+  > string, not a placeholder: a placeholder would be bytes nobody asked for sitting in the
+  > cached prefix of every later turn.
+
+  > **The `message` is returned only on a rotation, and here is why.** 6.1 says to return
+  > `{ systemPrompt, message }`. Pi converts a `custom` message into a **user** message in
+  > the provider payload (`core/messages.js`, `case "custom"`) whatever its `display` flag —
+  > so one emitted every turn would add billed tokens immediately after the cached prefix,
+  > the exact opposite of this task's purpose, and would perturb the conversation the agent
+  > sees. design §15's segment 4 is the turn's own input, which is already present. The
+  > message therefore carries the one thing nothing else can say: the cached prefix just
+  > moved and this turn is priced accordingly. **Assumption flagged** rather than resolved
+  > silently — the task does not say when the message should be emitted.
+
+  > **Why 6.3 stays unticked.** The instrument is built (`observePayloadPrefix`, the
+  > `--prefix-debug` flag, `.saltcode/prefix_debug.jsonl`) and unit-tested against both
+  > provider payload shapes. But its whole purpose is to *verify* against a real provider
+  > request, and there is no provider on this box — so it has never produced a reading, and
+  > design §15's 74%-discount figure is still modeled rather than measured. Recorded as
+  > **G-036**. It hashes only the cacheable head, so a growing conversation does not report
+  > a moved prefix every turn; it is off by default, because an instrument left running on
+  > every provider request is a cost of its own.
+
+  > **Also unverified:** the byte-diff leg is proven where the guarantee lives — the pure
+  > `decidePrefix` — not through a live Pi session, which needs a model (G-028). The
+  > handler between them is a typechecked pass-through.
+
+  > **Verification:** `npm run typecheck` · `npm run lint` · `npm run test:agents`
+  > (**128 passed**, 21 of them new in `test/prefix.test.mjs`). 2026-08-18.
 
 ## Task 11 — Saltnitor + DeepSeek/Qwen as registered providers  ·  deps: 2, 13  ·  [CHANGED]
 - [x] 11.1 `pi.registerProvider("deepseek", { api:"openai-completions"|… , models:[v4-flash, v4-pro], apiKey:"$DEEPSEEK_API_KEY" })` and optional Qwen provider.
