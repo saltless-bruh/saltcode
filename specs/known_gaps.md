@@ -961,6 +961,53 @@ where this assumes, or that Pi's chaining of multiple extensions' `systemPrompt`
 (the API notes they are chained) puts another extension's bytes inside our frozen prefix.
 Neither is visible without a running Pi. Same family as **G-028**.
 
+### - [ ] G-038 — Nothing can write to the spec cache, so the zero-API tier is inert
+**Severity:** HIGH · **Noticed:** Task 8.2 · **Closed by:** a new backend entrypoint —
+**needs a maintainer decision, see the question below** · **Where:**
+`saltcode_backend/saltcode/memory/spec_cache.py::store_spec`,
+`saltcode_backend/saltcode/memory/semantic_cache.py::store_semantic_spec`,
+`specs/tasks.md` 7b.1 and 8.2, `extensions/saltcode.ts`
+
+Task 8.2 requires the extension to *"store spec hash"* at the Phase Gate, and REQ-ORC-002
+AC1 makes it part of the gate: *"the spec locks, the spec hash is stored (REQ-CACHE-002),
+and Phase 2 begins automatically."* REQ-CACHE-002 fixes the store-time fingerprint as
+`sorted(tasks.json[*].files_affected)`.
+
+`store_spec` and `store_semantic_spec` implement exactly that, correctly, and have **no
+production caller and no CLI entrypoint**. Task 7b.1's roster is lookup-only —
+`cache_lookup` has no `--store` mode — and REQ-EXT-004 makes entrypoints the extension's
+only route to the backend. So the write side of the cache is unreachable from the shipped
+system.
+
+*Why it matters, and why it is HIGH:* the ladder Task 8.1 just built is correct, tested,
+and **permanently cold**. `cache_lookup` can only ever return `miss`, because nothing has
+ever written a row. Every sprint pays a full Phase-1 fire, which is the cost REQ-CACHE-001
+exists to avoid — and nothing anywhere reports it, because "miss → fire Phase 1" is also
+the correct behaviour for a genuinely new goal. A cache that is silently always empty and a
+cache that is working look identical from the outside. That is the failure mode this list
+exists for.
+
+*Not worked around.* Computing the key in TypeScript and writing a JSON file would produce
+a second cache the exact tier never reads — populated-looking and always missing — which is
+worse than the honest gap. `.claude/rules/stop-and-ask.md` forbids exactly that
+substitution, so 8.2's box stays unticked over the one clause.
+
+*Recommended fix:* an eighteenth entrypoint, `saltcode.tools.cache_store`:
+
+```
+python -m saltcode.tools.cache_store --repo . --goal "<goal>" --in .saltcode/tasks.json
+```
+
+wrapping `store_spec` + `store_semantic_spec` (the semantic half degrading to exact-only
+when no embedding endpoint answers, as `cache_lookup` already does). It joins the Task 7b
+roster and inherits all eight conformance invariants automatically. Backend work, ~60 lines,
+mirroring `cache_lookup`.
+
+*Rejected, recorded so it is not re-proposed:* adding `--store` to `cache_lookup`. Its name
+says lookup, its exit code means hit/miss, and the 7b conformance suite's exit-code
+semantics do not fit a mutation. A tool that silently writes when you thought you were
+reading is the kind of surprise this codebase has already paid for once.
+
 ### - [x] G-030 — Two tasks both claim Saltnitor provider registration
 **Severity:** LOW · **Noticed:** Task 13.1 · **Closed:** 2026-08-11 ·
 **Where:** `specs/tasks.md` 13.1 and 11.2

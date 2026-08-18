@@ -10,18 +10,30 @@
  * Ordering is owned by this code, not by a model. A chain the LLM could reorder is not a
  * DAG, and the one-fire-per-sprint rule (REQ-ORC-001 AC2) would be a suggestion.
  *
- * **What this file deliberately does not do.** The cache ladder that runs *before* Phase 1
- * (REQ-CACHE-001), the automatic Phase-Gate persistence, and the Evaluator's re-loop
- * routing are Task 8; the regression gate, the checkpoint and the auto-advance run modes
- * are Tasks 17 and 18. The seams are named where they attach. A non-`pass` Evaluator
- * therefore stops and reports here rather than looping — stopping is honest, and inventing
- * Task 8's routing would bury it.
+ * **The Evaluator re-loop (Task 8.3).** A non-`pass` report routes its gaps to the
+ * Architect or the Planner (REQ-EVL-002) and the chain re-runs *from that agent onward* —
+ * an Architect re-loop re-emits `design.md` and the Planner necessarily re-plans against
+ * it, so restarting mid-chain rather than from the Scout is what makes a re-loop cheaper
+ * than a sprint. The caps (Architect ≤ 2, Planner ≤ 3) are charged by the caller through
+ * `recordLoop`, because the counters are sprint state that outlives any one report; a
+ * breach halts with the gap report in front of a human (REQ-EVL-003 AC1, REQ-FAIL-003).
+ *
+ * **What this file still does not do.** The cache ladder that runs *before* Phase 1 lives
+ * in `ladder.ts` and is driven by the `/sprint` handler; the regression gate, the
+ * checkpoint and the auto-advance run modes are Tasks 17 and 18.
  */
 
 import type { EventBus } from "@earendil-works/pi-coding-agent";
 import { type AgentName, PHASE1_CHAIN } from "./agents.ts";
 import type { BackendRunner } from "./backend.ts";
 import { EXIT_POSITIVE } from "./backend.ts";
+import {
+  describeGapReport,
+  type EvaluatorReport,
+  parseEvaluatorReport,
+  reloopPrompt,
+  routeGaps,
+} from "./evaluator.ts";
 import { canFirePhase1, newSprint, type SprintState } from "./state.ts";
 import { describeSpawn, type SpawnResult, spawnAgent } from "./subagents.ts";
 import type { SaltcodeUI } from "./ui.ts";
@@ -48,12 +60,24 @@ export interface Phase1Deps {
   /** Applies the design §6 route for this agent before its turn (REQ-EXT-003). */
   route: (agent: AgentName) => Promise<{ ok: boolean; reason?: string }>;
   onProgress: (agent: AgentName, phase: "start" | "done", detail?: string) => void;
+  /**
+   * Charge one Evaluator-routed re-loop against the sprint caps and persist the counters.
+   *
+   * Injected rather than computed here: `recordEvaluatorRoute` is pure, but the counters
+   * it folds live in session state and must survive a resume (REQ-EVL-003, REQ-ORC-005).
+   */
+  recordLoop: (
+    target: "architect" | "planner",
+  ) =>
+    | { outcome: "reloop"; target: "architect" | "planner" }
+    | { outcome: "flag_human"; reason: string };
   signal?: AbortSignal | undefined;
 }
 
 export type Phase1Outcome =
-  | { outcome: "planned"; evaluator: "pass" }
-  | { outcome: "stopped"; agent: AgentName; reason: string };
+  | { outcome: "planned"; evaluator: "pass"; loops: number }
+  | { outcome: "stopped"; agent: AgentName; reason: string }
+  | { outcome: "flag_human"; reason: string; report: EvaluatorReport };
 
 /**
  * Run Scout → Architect → Planner → Test Intent → Evaluator, serially.
@@ -64,7 +88,73 @@ export type Phase1Outcome =
  * `tasks.json` built on nothing.
  */
 export async function runPhase1(goal: string, deps: Phase1Deps): Promise<Phase1Outcome> {
-  for (const agent of PHASE1_CHAIN) {
+  let from: AgentName = PHASE1_CHAIN[0];
+  let prompt = (agent: AgentName): string => phase1Prompt(agent, goal);
+  let loops = 0;
+
+  for (;;) {
+    const step = await runChainFrom(from, prompt, deps);
+    if (step !== null) return step;
+
+    const report = parseEvaluatorReport(deps.workspace.read("evaluator_report.json"));
+    if (report.status === "pass") return { outcome: "planned", evaluator: "pass", loops };
+
+    if (report.status === "unreadable") {
+      // Not a re-loop: there is nothing to route. Charging a cap for an unparseable report
+      // would spend the sprint's two Architect attempts on a file-format problem.
+      return {
+        outcome: "stopped",
+        agent: "evaluator",
+        reason: `the Evaluator's report cannot be read, so its gaps cannot be routed: ${report.detail}`,
+      };
+    }
+
+    const routing = routeGaps(report.gaps);
+    if (routing === null) {
+      return {
+        outcome: "flag_human",
+        report,
+        reason: describeGapReport(
+          report,
+          "The Evaluator rejected the plan but listed no routable gap, so there is nothing to " +
+            "re-run and no way to tell which agent would fix it.",
+        ),
+      };
+    }
+
+    const charged = deps.recordLoop(routing.target);
+    if (charged.outcome === "flag_human") {
+      return { outcome: "flag_human", report, reason: describeGapReport(report, charged.reason) };
+    }
+
+    loops += 1;
+    deps.onProgress(routing.target, "start", routing.why);
+    from = routing.target;
+    // The re-looped agent gets the gaps, not the original brief: it already produced
+    // something once, and repeating the first prompt verbatim invites the same output.
+    // Every agent *after* it in the chain is running fresh against the new artifact, so
+    // those keep the standard prompt.
+    prompt = (agent: AgentName): string =>
+      agent === routing.target ? reloopPrompt(goal, routing) : phase1Prompt(agent, goal);
+  }
+}
+
+/**
+ * Run the chain from `start` through the Evaluator. Returns `null` when every step
+ * succeeded, or the outcome to propagate when one did not.
+ *
+ * Starting mid-chain is what makes a re-loop cheaper than a sprint: an Architect re-loop
+ * re-emits `design.md` and the Planner, Test Intent and Evaluator all re-run against it,
+ * but the Scout's map of the repository has not changed and re-running it would spend an
+ * API call to produce the same file.
+ */
+async function runChainFrom(
+  start: AgentName,
+  prompt: (agent: AgentName) => string,
+  deps: Phase1Deps,
+): Promise<Phase1Outcome | null> {
+  const begin = PHASE1_CHAIN.indexOf(start as (typeof PHASE1_CHAIN)[number]);
+  for (const agent of PHASE1_CHAIN.slice(begin === -1 ? 0 : begin)) {
     deps.onProgress(agent, "start");
 
     const routed = await deps.route(agent);
@@ -73,7 +163,7 @@ export async function runPhase1(goal: string, deps: Phase1Deps): Promise<Phase1O
     }
 
     const spawn: SpawnResult = await spawnAgent(deps.events, agent, {
-      task: phase1Prompt(agent, goal),
+      task: prompt(agent),
       cwd: deps.workspace.root,
       ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
     });
@@ -102,35 +192,7 @@ export async function runPhase1(goal: string, deps: Phase1Deps): Promise<Phase1O
 
     deps.onProgress(agent, "done", describeSpawn(agent, spawn));
   }
-
-  const report = deps.workspace.read("evaluator_report.json");
-  const status = report === undefined ? undefined : readEvaluatorStatus(report);
-  if (status !== "pass") {
-    return {
-      outcome: "stopped",
-      agent: "evaluator",
-      reason:
-        `the Evaluator returned ${status ?? "no readable status"}. Its gaps route back to the ` +
-        "Architect or the Planner within caps (REQ-EVL-003) — that routing is Task 8.3 and is " +
-        "not wired yet, so the sprint stops here with the report on disk rather than advancing " +
-        "on an unvalidated plan.",
-    };
-  }
-
-  return { outcome: "planned", evaluator: "pass" };
-}
-
-function readEvaluatorStatus(json: string): string | undefined {
-  try {
-    const parsed: unknown = JSON.parse(json);
-    if (parsed !== null && typeof parsed === "object" && "status" in parsed) {
-      const status = (parsed as { status: unknown }).status;
-      return typeof status === "string" ? status : undefined;
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
+  return null;
 }
 
 /**

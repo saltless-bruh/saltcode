@@ -37,7 +37,7 @@ import {
 import { decideAccess } from "./saltcode/access.ts";
 import { type AgentName, selectBuilderProfile } from "./saltcode/agents.ts";
 import { BackendRunner, DRY_RUN_LOG, EXIT_POSITIVE } from "./saltcode/backend.ts";
-import { describeBudget, type TaskBudget } from "./saltcode/budget.ts";
+import { describeBudget, recordEvaluatorRoute, type TaskBudget } from "./saltcode/budget.ts";
 import { registerContainedBuiltins } from "./saltcode/builtins.ts";
 import {
   configFromToml,
@@ -53,6 +53,12 @@ import {
 } from "./saltcode/constraints.ts";
 import { createContainedExec } from "./saltcode/contained.ts";
 import { createGates } from "./saltcode/gates.ts";
+import {
+  confirmationPrompt,
+  type LadderAction,
+  readConfirmation,
+  runLadder,
+} from "./saltcode/ladder.ts";
 import { runTask, type TaskSpec } from "./saltcode/phase2.ts";
 import {
   DEFAULT_NOTES_SESSION,
@@ -74,6 +80,7 @@ import {
   replayState,
   type SaltcodeState,
 } from "./saltcode/state.ts";
+import { describeSpawn, spawnAgent } from "./saltcode/subagents.ts";
 import { registerBackendTools } from "./saltcode/tools.ts";
 import { type GateBoard, type GateName, type GateStatus, SaltcodeUI } from "./saltcode/ui.ts";
 import { Workspace } from "./saltcode/workspace.ts";
@@ -114,6 +121,15 @@ export default function saltcode(pi: ExtensionAPI): void {
     default: false,
   });
 
+  pi.registerFlag("scope", {
+    description:
+      "Comma-separated scope paths for the spec-cache key. Given, they are used directly " +
+      "and the scope probe does not run (REQ-CACHE-002 AC2). Comma-separated rather than " +
+      "repeatable because Pi's flags are string or boolean, not arrays.",
+    type: "string",
+    default: "",
+  });
+
   pi.registerFlag("prefix-debug", {
     description:
       "Hash the cacheable head of every provider request to " +
@@ -132,6 +148,15 @@ export default function saltcode(pi: ExtensionAPI): void {
       return requireSession().workspace;
     },
   });
+
+  /** `--scope a,b` → `["a","b"]`. Blank entries are dropped, not passed as empty paths. */
+  function splitScope(raw: unknown): string[] {
+    if (typeof raw !== "string") return [];
+    return raw
+      .split(",")
+      .map((part) => part.trim())
+      .filter((part) => part !== "");
+  }
 
   function requireSession(): Session {
     if (session === undefined) {
@@ -459,62 +484,125 @@ export default function saltcode(pi: ExtensionAPI): void {
       }
 
       current.state.sprint = opened.sprint;
-      current.state.sprint.phase = "phase1";
-      current.state.sprint.phase1Fired = true;
-      persistSprint();
-      render();
+      const sprint = current.state.sprint;
 
-      const phase1 = await runPhase1(goal, {
-        events: pi.events,
+      // ------------------------------------------------ 8.1 the cache ladder
+      // Runs BEFORE Phase 1 and stops at the first hit (REQ-CACHE-001). `--scope` comes
+      // from the flag when the human supplied one, which is what skips the probe
+      // (REQ-CACHE-002 AC2). Nothing here fires an agent except the confirmation turn a
+      // semantic candidate requires.
+      const scopeFlag = splitScope(pi.getFlag("scope"));
+      const ladder = await runLadder({
         runner: current.runner,
-        workspace: current.workspace,
-        ui: current.ui,
-        route: async (agent) => {
-          const resolution = await applyRoute(
-            agent,
-            {
-              online: current.online,
-              project: current.state.sprint?.project ?? "fresh",
-            },
-            {
-              pi,
-              ctx,
-              ...(current.config.providerFallbacks !== undefined
-                ? { configuredFallbacks: current.config.providerFallbacks }
-                : {}),
-              onFallback: ({ agent: who, from, to }) =>
-                current.workspace.append(
-                  JSON.stringify({
-                    at: new Date().toISOString(),
-                    agent: who,
-                    fallback_from: from,
-                    fallback_to: to,
-                  }),
-                  "audit_log.jsonl",
-                ),
-            },
-          );
-          current.ui.status(describeRoute(resolution));
-          return resolution.ok ? { ok: true } : { ok: false, reason: resolution.reason };
-        },
-        onProgress: (agent, phase, detail) => {
-          current.ui.status(
-            `saltcode: ${agent} ${phase}${detail !== undefined ? ` — ${detail}` : ""}`,
-          );
-        },
+        goal,
+        online: current.online,
+        ...(scopeFlag.length > 0 ? { scope: scopeFlag } : {}),
         ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
       });
+      current.ui.status(`saltcode: cache ladder — ${ladder.why}`);
+      if (ladder.lookup?.uncalibrated === true) {
+        current.ui.notify(
+          "Saltcode: at least one cache threshold is still provisional (REQ-CAL-001). This " +
+            "answer rests on a conservative default, not a measurement — run /calibrate once " +
+            "there are a few sprints of data.",
+          "warning",
+        );
+      }
+
+      const reuse = await resolveLadder(current, ladder, goal, ctx);
+      if (reuse.reused) {
+        // AC1/AC2: the cached plan stands. Phase 1 never fires, so `phase1Fired` stays
+        // false — a later `/sprint` in this session is still entitled to its one fire.
+        sprint.phase = "phase_gate";
+        sprint.taskOrder = reuse.taskOrder;
+        persistSprint();
+        render();
+        current.ui.notify(`Saltcode reused a cached plan: ${reuse.why}`, "info");
+      } else {
+        sprint.phase = "phase1";
+        sprint.phase1Fired = true;
+        persistSprint();
+        render();
+      }
+
+      const phase1 = reuse.reused
+        ? ({ outcome: "planned", evaluator: "pass", loops: 0 } as const)
+        : await runPhase1(goal, {
+            events: pi.events,
+            runner: current.runner,
+            workspace: current.workspace,
+            ui: current.ui,
+            route: async (agent) => {
+              const resolution = await applyRoute(
+                agent,
+                {
+                  online: current.online,
+                  project: current.state.sprint?.project ?? "fresh",
+                },
+                {
+                  pi,
+                  ctx,
+                  ...(current.config.providerFallbacks !== undefined
+                    ? { configuredFallbacks: current.config.providerFallbacks }
+                    : {}),
+                  onFallback: ({ agent: who, from, to }) =>
+                    current.workspace.append(
+                      JSON.stringify({
+                        at: new Date().toISOString(),
+                        agent: who,
+                        fallback_from: from,
+                        fallback_to: to,
+                      }),
+                      "audit_log.jsonl",
+                    ),
+                },
+              );
+              current.ui.status(describeRoute(resolution));
+              return resolution.ok ? { ok: true } : { ok: false, reason: resolution.reason };
+            },
+            onProgress: (agent, phase, detail) => {
+              current.ui.status(
+                `saltcode: ${agent} ${phase}${detail !== undefined ? ` — ${detail}` : ""}`,
+              );
+            },
+            // 8.3 — the caps live in sprint state, so charging one is a state mutation that
+            // has to be persisted before the re-loop runs. If the session dies mid-loop the
+            // counter must already be on disk, or a resume gets its two Architect attempts
+            // back and the cap stops being a cap.
+            recordLoop: (target) => {
+              const transition = recordEvaluatorRoute(sprint.loops, target);
+              sprint.loops = transition.loops;
+              persistSprint();
+              render();
+              return transition.result;
+            },
+            ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+          });
 
       if (phase1.outcome === "stopped") {
         flagHuman(`Phase 1 stopped at the ${phase1.agent}: ${phase1.reason}`);
         return;
       }
+      if (phase1.outcome === "flag_human") {
+        // REQ-EVL-003 AC1 / REQ-FAIL-003: a cap breach halts with the report, never
+        // silently. The plan on disk is the last one the Evaluator rejected.
+        flagHuman(phase1.reason);
+        return;
+      }
 
-      // REQ-ORC-002: the Phase-Gate is automatic on an Evaluator pass. Task 8.2 adds the
-      // spec lock and the stored spec hash; the advance itself belongs here.
-      current.state.sprint.phase = "phase_gate";
+      // ------------------------------------------------- 8.2 the Phase Gate
+      // REQ-ORC-002 AC1: on an Evaluator pass the spec locks and Phase 2 begins with no
+      // human action. `specHash` is the lock — set once, and `openSprint` refuses a second
+      // Phase-1 fire in the same sprint from here on.
+      sprint.phase = "phase_gate";
       const tasksJson = current.workspace.read("tasks.json");
-      current.state.sprint.taskOrder = tasksJson === undefined ? [] : readTaskOrder(tasksJson);
+      sprint.taskOrder =
+        reuse.reused && reuse.taskOrder.length > 0
+          ? reuse.taskOrder
+          : tasksJson === undefined
+            ? []
+            : readTaskOrder(tasksJson);
+      if (reuse.key !== "") sprint.specHash = reuse.key;
       persistSprint();
       render();
 
@@ -539,6 +627,55 @@ export default function saltcode(pi: ExtensionAPI): void {
       await runPhase2(ctx);
     },
   });
+
+  /**
+   * Turn a ladder verdict into "reuse this plan" or "fire Phase 1" (8.1 · REQ-CACHE-003).
+   *
+   * The one thing that must not be shortened: a `semantic_candidate` reaches `reuse` only
+   * through an Architect confirmation that answered yes. Everything else here — an
+   * unspawnable Architect, an unparseable answer, a cached plan with no readable tasks —
+   * falls through to Phase 1, because the cost of being wrong is asymmetric. A wrong reuse
+   * builds against a plan for different work and every later gate validates it faithfully;
+   * a wrong fall-through costs one planning pass.
+   */
+  async function resolveLadder(
+    current: Session,
+    ladder: LadderAction,
+    goal: string,
+    ctx: ExtensionContext,
+  ): Promise<{ reused: boolean; why: string; taskOrder: string[]; key: string }> {
+    const key = ladder.lookup?.key ?? "";
+    const fire = (why: string) => ({ reused: false, why, taskOrder: [] as string[], key: "" });
+
+    if (ladder.action === "fire") return fire(ladder.why);
+
+    if (ladder.action === "confirm") {
+      const spawn = await spawnAgent(pi.events, "architect", {
+        task: confirmationPrompt(goal, ladder.bar, ladder.lookup.tasks),
+        cwd: current.workspace.root,
+        ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+      });
+      if (!spawn.ok) {
+        return fire(
+          `the Architect confirmation could not run (${describeSpawn("architect", spawn)}), so ` +
+            "the cached plan is not reused — REQ-CACHE-003 AC1 makes the confirmation the " +
+            "condition of reuse, and skipping it because it failed would invert that",
+        );
+      }
+      const answer = readConfirmation(spawn.output ?? "");
+      if (!answer.confirmed) return fire(`the Architect declined the cached plan: ${answer.why}`);
+    }
+
+    // Either an exact hit, a configured `skip`, or a confirmed candidate.
+    const taskOrder = readTaskOrder(JSON.stringify(ladder.lookup.tasks ?? {}));
+    if (taskOrder.length === 0) {
+      return fire(
+        `the cache returned a plan with no readable tasks (key ${key.slice(0, 12)}), so it ` +
+          "cannot be reused; firing Phase 1",
+      );
+    }
+    return { reused: true, why: ladder.why, taskOrder, key };
+  }
 
   pi.registerCommand("status", {
     description: "Show the current sprint, task, budget and gate state.",

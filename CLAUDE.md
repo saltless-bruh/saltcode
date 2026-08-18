@@ -114,15 +114,18 @@ workspace/         # target projects Saltcode operates on
   **6.3 is not**: the `--prefix-debug` instrument exists and is unit-tested but has never
   produced a reading against a real provider, so design §15's cached-prefix economics stay
   modeled rather than measured (**G-036**).
+  **Task 8** (cache ladder + Phase-Gate) — **8.1 and 8.3 are ticked**; **8.2 is blocked**
+  on **G-038**: `store_spec` has no CLI entrypoint, so nothing can write to the spec cache
+  and the zero-API tier is built but permanently cold. **This needs a maintainer decision.**
 - **Both open questions were answered (maintainer, 2026-08-11) and are closed.**
   **G-029** — `saltcode.tools.contained_exec` now exposes the container as a CLI
   entrypoint, so the built-in `write`/`edit`/`bash` overrides route through it and
   REQ-SEC-007 AC1 is met; the `bash rm -rf` Done-when leg is proven by a test that checks
   the host file survives, not just the exit code. **G-030** — Task 11.2 owns Saltnitor
   provider registration; the clause is struck from 13.1.
-- **Next:** **Task 8** (the cache ladder + Phase-Gate orchestration) is the last of
-  `{6, 8, 11}`; then 13b, then **18**, which Task 17 unblocked. Build order is at the
-  bottom of `specs/tasks.md`.
+- **Next:** 13b, then **18** (Task 17 unblocked it). **G-038 is the open question** —
+  Track B cannot deliver a working cache tier until the spec-cache write path exists.
+  Build order is at the bottom of `specs/tasks.md`.
 - **Deployment (confirmed 2026-07-28):** everything — Saltcode, Saltnitor, Docker,
   the embedding endpoint — runs on **one machine, this one**. The privacy boundary
   is therefore the box: only loopback counts as local, and a LAN address is off-box.

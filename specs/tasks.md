@@ -516,11 +516,60 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
   > (**106 passed**). 2026-08-17.
 
 ## Task 8 — Cache ladder + Phase-Gate orchestration (extension)  ·  deps: 5, 7, 13  ·  [CHANGED]
-- [ ] 8.1 In the `/sprint` handler: resolve scope (`saltcode_scope_probe` or `--scope`), run `saltcode_cache_lookup` (exact → semantic with **PCD-adaptive** Architect confirmation) → reuse or fire Phase 1; stop at first hit.
+- [x] 8.1 In the `/sprint` handler: resolve scope (`saltcode_scope_probe` or `--scope`), run `saltcode_cache_lookup` (exact → semantic with **PCD-adaptive** Architect confirmation) → reuse or fire Phase 1; stop at first hit.
 - [ ] 8.2 On Evaluator `pass`: lock spec, store spec hash, advance to Phase 2 automatically; persist sprint state (`pi.appendEntry`).
-- [ ] 8.3 Evaluator loop routing + caps (A≤2 / P≤3) → FLAG HUMAN on breach (`ctx.ui`).
+- [x] 8.3 Evaluator loop routing + caps (A≤2 / P≤3) → FLAG HUMAN on breach (`ctx.ui`).
 - **Satisfies:** REQ-CACHE-001, REQ-ORC-001/002, REQ-EVL-002/003, REQ-FAIL-003.
 - **Done when:** exact hit reuses `tasks.json` with zero API; semantic "no" falls through to Phase 1; exceeding a loop cap halts with a human flag + report; a second Phase-1 fire in one sprint is refused.
+
+  > **⚠ 8.2 IS BLOCKED ON A MISSING ENTRYPOINT — see G-038 and the question below.** Two of
+  > its three clauses are done (the spec lock + automatic advance, and the persisted sprint
+  > state). *"store spec hash"* cannot be done: `spec_cache.store_spec` and
+  > `semantic_cache.store_semantic_spec` exist in the backend and **have no production
+  > caller and no CLI entrypoint**. Task 7b.1's roster is lookup-only, and REQ-EXT-004 makes
+  > entrypoints the extension's only route to the backend. Writing the key in TypeScript
+  > instead would create a second cache the exact tier never reads — a cache that looks
+  > populated and always misses — so the leg is reported rather than faked.
+
+  > **The consequence, stated plainly:** until a store exists, `cache_lookup` can only ever
+  > return `miss`. 8.1's ladder is correct and tested, and in a real run it will fall through
+  > every time, because nothing has ever written a row. The zero-API tier is built and inert.
+
+  > **The asymmetry the ladder is built around.** A wrong *reuse* builds against a plan
+  > written for different work, and every later gate — static, tests, Auditor, regression —
+  > validates it faithfully, because each checks the diff against the plan rather than the
+  > plan against reality. A wrong *fall-through* costs one planning pass. So every ambiguous
+  > path falls through: an Architect that cannot be spawned, an answer that does not start
+  > with YES or NO, a cached plan with no readable tasks, an unreadable payload. Each says
+  > why. `decideLadder` has no path from `semantic_candidate` to `reuse` that does not pass
+  > through a confirmation — the sole exception being `confirmation: "skip"`, which
+  > REQ-CACHE-003 AC2 makes opt-in **configuration**, so honouring it follows the project's
+  > choice rather than lowering the bar unasked.
+
+  > **8.3 restarts the chain mid-way, not from the Scout.** An Architect re-loop re-emits
+  > `design.md` and the Planner, Test Intent and Evaluator all re-run against it — but the
+  > Scout's map of the repository has not changed, and re-running it would spend an API call
+  > to produce the same file. The re-looped agent gets the **gaps** as its prompt, not the
+  > original brief; repeating the first prompt verbatim invites the same output. Agents
+  > *after* it in the chain are running fresh against a new artifact and keep the standard
+  > prompt.
+
+  > **Routing follows the type, except where the requirement makes it conditional.** Any
+  > `design_gap` present ⇒ the Architect (REQ-EVL-002 AC1) — one design gap outranks any
+  > number of plan gaps, because re-planning against a design that is still missing
+  > something produces a different wrong plan, not a right one. A `constraint_violation`
+  > goes to the Planner *unless the Evaluator escalated it*, which is honoured because
+  > "conflicts with design.md" is a judgement only the Evaluator's compliance check made.
+
+  > **A cap breach is charged before the re-loop runs.** `recordLoop` mutates sprint state
+  > and persists it inside the callback, so a session that dies mid-loop resumes with the
+  > counter already spent. Deferring the write would hand a resumed sprint its two Architect
+  > attempts back, and a cap you can reset by crashing is not a cap. An **unreadable**
+  > report is deliberately *not* charged: there is nothing to route, and spending the
+  > sprint's Architect budget on a file-format problem would be the wrong debit.
+
+  > **Verification:** `npm run typecheck` · `npm run lint` · `npm run test:agents`
+  > (**151 passed**, 23 of them new in `test/ladder.test.mjs`). 2026-08-18.
 
 ## Task 13 — The TypeScript extension (the bridge)  ·  deps: 7b, 7  ·  [REPLACED]
 > Replaces the old Typer CLI + Textual TUI entirely. This is the core integration piece.
