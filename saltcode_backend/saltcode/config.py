@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -57,8 +58,22 @@ settings = Settings(
 
 logger = logging.getLogger(__name__)
 
-def check_calibration() -> None:
-    """Logs a warning at session open if the thresholds are uncalibrated."""
+def check_calibration(workspace_path: Path | str | None = None) -> None:
+    """Log a warning at session open when any threshold is still uncalibrated.
+
+    REQ-CAL-001 AC1/AC2. With a workspace, the per-threshold resolution in
+    `saltcode.thresholds` decides — calibration arrives one threshold at a time
+    (Task 14b calibrates the Auditor bar from labelled diffs and the semantic bars
+    from labelled goal pairs, independently), so a single project-wide flag would
+    have to misreport one of them. Without a workspace this falls back to the
+    process-wide `settings.calibrated`, which is what the pre-Task-5 callers used.
+    """
+    if workspace_path is not None:
+        from saltcode.thresholds import load_thresholds, warn_if_uncalibrated
+
+        warn_if_uncalibrated(load_thresholds(workspace_path))
+        return
+
     if not settings.calibrated:
         logger.warning(
             "Thresholds (stability, cosine, PCD bars) are UNCALIBRATED. "

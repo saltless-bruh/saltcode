@@ -41,11 +41,11 @@ from saltcode.contracts import (
 from saltcode.tools._cli import (
     EXIT_ERROR,
     EXIT_OK,
-    EXIT_USAGE,
     EXIT_VERDICT_NEGATIVE,
     STDIN_SENTINEL,
     emit,
     fail,
+    parse_cli,
     read_payload,
 )
 
@@ -100,10 +100,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    try:
-        args = parser.parse_args(argv)
-    except SystemExit:
-        return EXIT_USAGE
+    args, code = parse_cli(parser, argv, TOOL)
+    if args is None:
+        # `--help` (code 0) or a usage error whose JSON envelope parse_cli
+        # already emitted. Either way there is nothing further to run.
+        return code
 
     contract_name: str = args.contract
     model_class = CONTRACTS[contract_name]

@@ -64,6 +64,7 @@ when a leg of its **Done when** gate was skipped or unverified — name the leg 
 ```
 docs/proposal/     # ← SOURCE OF TRUTH (v8 framework + v9 Pi addendum)
 docs/developer_handbook.md   # implementation cookbook (LSP JSON-RPC, LanceDB, sandbox recipes)
+docs/entrypoints.md          # the backend CLI contract the extension is written against (Task 7b)
 specs/             # requirements.md · design.md · tasks.md · known_gaps.md  (v9, canonical)
 specs/legacy/      # pre-v9 standalone spec set (archived, non-authoritative)
 package.json       # Pi Package manifest · extensions/ prompts/ skills/ agents/
@@ -74,18 +75,57 @@ workspace/         # target projects Saltcode operates on
 .agents/           # the same assets in Antigravity's format — a separate tool's config
 ```
 
-## Build state (2026-07-28)
+## Build state (2026-08-18)
 
-- **Done:** v9 **Tasks 0–3.** Task 0 (Pi Package scaffold, two-lane CI, verified on
-  Pi 0.82.1) · Task 1 (typed contracts + Output-Length Enforcer + `validate_contract`
-  / `diff_check` entrypoints) · Task 2 (Saltnitor client, local embeddings,
-  connectivity probe, the source-payload privacy guard) · Task 3 (disposable
-  sandbox + bubblewrap security container, command allowlist, audit log, scope
-  probe). **183 tests green, 0 skipped;** `ruff` + `pyright --strict` clean;
-  extension lane (`tsc --noEmit`, `biome`) clean.
-- **Next:** Track A at **Task 4** (LSP/AST MCP server + scoped-read broker) or
-  **Task 5** (LanceDB memory) — parallel after Task 3. Track B starts at **Task 7**
-  (sub-agent definitions). Build order is at the bottom of `specs/tasks.md`.
+- **Track A is built out, with one leg still open.** v9 **Tasks 0–3, 5, 9, 10, 12, 14b,
+  7b** are done and ticked. **Task 4 is not** — its box stays unticked because 4.6 is
+  deferred to Task 20.1 (see G-011), so Track A carries one open integration leg.
+  Task 0 (Pi Package scaffold, two-lane CI, verified on Pi 0.82.1) · Task 1 (typed
+  contracts + Output-Length Enforcer) · Task 2 (Saltnitor client, local embeddings,
+  connectivity probe, the source-payload privacy guard) · Task 3 (disposable sandbox +
+  bubblewrap container, command allowlist, audit log, scope probe) · Task 4 (LSP/AST MCP
+  server + scoped-read broker — built, **box still unticked**, 4.6 deferred to Task 20.1,
+  see G-011) · Task 5 (LanceDB caches, PCD semantic tier, frozen notes, per-threshold
+  calibration flags) · Task 9 (static gate, task-spec runner, diff validator) · Task 10
+  (N-pass Auditor stability, anti-gaming heuristics, `apply_live`, scoped read) ·
+  Task 12 (Spec Compactor) · Task 14b (measured-then-fixed threshold calibration) ·
+  Task 7b (the thirteen CLI entrypoints + `docs/entrypoints.md` + the conformance suite).
+  **Task 17** (checkpoint backend) is done and ticked: `saltcode/checkpoint/{regression,
+  checkpoint,rollback}.py` — the full suite on the integrated live tree in the container,
+  the commit + record, and `git reset --hard` to a named checkpoint with a dirty-tree
+  refusal and an audit-log entry.
+  **865 backend tests pass locally, 1 skips** (G-013's honest `limits_enforced=false` on a
+  systemd-less host). `ruff` + `pyright --strict` clean. The entrypoint roster is now
+  **seventeen**: `contained_exec` (Task 13.3, for G-029) plus Task 17's `regression`,
+  `checkpoint` and `rollback`.
+- **Track B is under way.** **Task 7** (sub-agent definitions) is done except 7.2b/7.3/7.3b
+  — the mechanism is verified through `pi-subagents@0.40.0`'s own loader, the behaviour
+  needs a live model (G-028). **Task 13** (the extension) is built: the factory is
+  `extensions/saltcode.ts` and the decisions live as pure functions in
+  `extensions/saltcode/*.ts`, so the privacy, write-scope, budget and routing rules are
+  provable without a running Pi. **13.1–13.7 and 13.9 are ticked; 13.8, 13.10 and Task 13's
+  box are not** — both open steps are implemented and unit-tested, and both wait on a live
+  model (G-028), which is also the only thing keeping Task 13's box unticked. Extension
+  lane: `tsc --noEmit` and `biome` clean, **107 tests** (`npm run test:agents`).
+  **Task 11** (registered providers) is built — 11.1, 11.2, 11.4, 11.5 are ticked;
+  **11.3 is not**, because the Auditor's tier is never `ensure`d from the extension
+  (G-031) and the residency legs need a live Saltnitor.
+  **Task 6** (the front-loaded stable prefix) is built — **6.1 and 6.2 are ticked**;
+  **6.3 is not**: the `--prefix-debug` instrument exists and is unit-tested but has never
+  produced a reading against a real provider, so design §15's cached-prefix economics stay
+  modeled rather than measured (**G-036**).
+  **Task 8** (cache ladder + Phase-Gate) — **8.1 and 8.3 are ticked**; **8.2 is blocked**
+  on **G-038**: `store_spec` has no CLI entrypoint, so nothing can write to the spec cache
+  and the zero-API tier is built but permanently cold. **This needs a maintainer decision.**
+- **Both open questions were answered (maintainer, 2026-08-11) and are closed.**
+  **G-029** — `saltcode.tools.contained_exec` now exposes the container as a CLI
+  entrypoint, so the built-in `write`/`edit`/`bash` overrides route through it and
+  REQ-SEC-007 AC1 is met; the `bash rm -rf` Done-when leg is proven by a test that checks
+  the host file survives, not just the exit code. **G-030** — Task 11.2 owns Saltnitor
+  provider registration; the clause is struck from 13.1.
+- **Next:** 13b, then **18** (Task 17 unblocked it). **G-038 is the open question** —
+  Track B cannot deliver a working cache tier until the spec-cache write path exists.
+  Build order is at the bottom of `specs/tasks.md`.
 - **Deployment (confirmed 2026-07-28):** everything — Saltcode, Saltnitor, Docker,
   the embedding endpoint — runs on **one machine, this one**. The privacy boundary
   is therefore the box: only loopback counts as local, and a LAN address is off-box.

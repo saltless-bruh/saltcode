@@ -85,7 +85,7 @@ def test_stability_score_validation() -> None:
         n_passes=3,
         verdicts=["pass", "pass", "pass"],
         stability_score=1.0,
-        gac=0
+        gac=1
     )
     assert stab.stability_score == 1.0
 
@@ -113,11 +113,11 @@ def test_stability_score_validation() -> None:
             n_passes=2,
             verdicts=["pass", "pass", "pass"],
             stability_score=1.0,
-            gac=0
+            gac=1
         )
 
 def test_audit_result_validation() -> None:
-    stab = StabilityInfo(n_passes=1, verdicts=["pass"], stability_score=1.0, gac=0)
+    stab = StabilityInfo(n_passes=1, verdicts=["pass"], stability_score=1.0, gac=1)
     
     # Valid AuditResult
     res = AuditResult(

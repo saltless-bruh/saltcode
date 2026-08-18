@@ -1,3 +1,20 @@
+"""Task 5 — the carried-over standalone-build tests, corrected for v9.
+
+Kept as the smoke-level pass over the memory layer; the leg-by-leg proofs live in
+`test_task_5_caches.py`, `test_task_5_notes.py` and `test_task_5_entrypoint.py`.
+
+Two assertions here were wrong before this task and are corrected:
+
+* `test_spec_cache` claimed the probe finds `src/auth.py` "since goal mentions auth.py".
+  That was the goal-filtering probe removed by **G-C03** — the goal is no longer an
+  input to the fingerprint at all. The old assertion passed only because the temporary
+  repo happened to contain exactly one source file, so the probe's answer coincided with
+  the plan's `files_affected`. It is rewritten to say what actually holds.
+* `test_calibration_warning` mutated the process-wide `settings.calibrated`, which
+  leaked into any test running after it. Calibration is now per threshold and per
+  workspace (`saltcode.thresholds`), so the check is workspace-scoped.
+"""
+
 import logging
 from pathlib import Path
 
@@ -14,7 +31,7 @@ from saltcode.memory.atomic_notes import (
 from saltcode.memory.lancedb_store import init_db
 from saltcode.memory.semantic_cache import lookup_semantic, store_semantic_spec
 from saltcode.memory.skills import add_skill, search_skills
-from saltcode.memory.spec_cache import lookup_spec, store_spec
+from saltcode.memory.spec_cache import lookup_spec, lookup_spec_result, store_spec
 from saltcode.providers.embeddings import EmbeddingClient
 
 
@@ -40,6 +57,12 @@ def mock_embedding() -> MockEmbeddingClient:
     return MockEmbeddingClient()
 
 
+@pytest.fixture(autouse=True)
+def _thaw_session_notes() -> None:
+    """The frozen-notes in-process cache is global; leaking it between tests fakes a freeze."""
+    clear_session_notes()
+
+
 def test_init_db(tmp_path: Path, mock_embedding: MockEmbeddingClient) -> None:
     db = init_db(tmp_path, mock_embedding)
     assert "spec_cache" in db
@@ -62,30 +85,35 @@ def test_spec_cache(tmp_path: Path) -> None:
             )
         ],
     )
-    
-    # Store spec with goal and scope
+
     goal = "implement auth.py"
     store_spec(tmp_path, goal, tasks_file)
-    
-    # Exact lookup works
+
+    # Exact lookup works when the caller passes the scope the plan was stored under.
     res = lookup_spec(tmp_path, goal, ["src/auth.py"])
     assert res is not None
     assert res.tasks[0].id == "T1"
-    
-    # Lookup with different scope misses
-    res_diff = lookup_spec(tmp_path, goal, ["src/signup.py"])
-    assert res_diff is None
-    
-    # Empty/fallback scope works
-    # If we lookup without scope, it falls back to scope probe
-    # Write a dummy file in tmp_path to simulate scope probe matching
+
+    # Lookup with a different scope misses (REQ-CACHE-002 AC1).
+    assert lookup_spec(tmp_path, goal, ["src/signup.py"]) is None
+
+    # With no --scope the probe supplies the fingerprint. It enumerates the repo's
+    # source modules and ignores the goal entirely (G-C03), so this hits only because
+    # the probe's answer happens to equal the plan's files_affected — one file, the
+    # same one. That coincidence is exactly what Trade C5 says will usually NOT hold;
+    # test_trade_c5_the_two_fingerprints_differ_by_design covers the general case.
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "auth.py").write_text("pass", encoding="utf-8")
-    
-    # Since goal mentions auth.py, the scope probe finds src/auth.py
-    res_fallback = lookup_spec(tmp_path, "implement auth.py")
-    assert res_fallback is not None
-    assert res_fallback.tasks[0].id == "T1"
+
+    probed = lookup_spec_result(tmp_path, goal)
+    assert probed.scope_source == "probed"
+    assert probed.scope_fingerprint == ["src/auth.py"]
+    assert probed.tasks is not None
+    assert probed.tasks.tasks[0].id == "T1"
+
+    # A differently-phrased goal over the same tree is a different key — the goal is
+    # hashed in separately, and the probe never sees it.
+    assert lookup_spec(tmp_path, "implement authentication") is None
 
 
 def test_semantic_cache(tmp_path: Path, mock_embedding: MockEmbeddingClient) -> None:
@@ -102,63 +130,49 @@ def test_semantic_cache(tmp_path: Path, mock_embedding: MockEmbeddingClient) -> 
             )
         ],
     )
-    
+
     # Store multiple entries to test Prior Cluster Density (PCD)
-    # Entry 1: Auth
     store_semantic_spec(tmp_path, "implement login auth", ["src/auth.py"], tasks_file, mock_embedding)
-    # Entry 2: Similar Auth
     store_semantic_spec(tmp_path, "implement signup auth", ["src/auth.py"], tasks_file, mock_embedding)
-    # Entry 3: database optimization (outlier)
     store_semantic_spec(tmp_path, "optimize sql database queries", ["src/db.py"], tasks_file, mock_embedding)
-    
-    # Query similar to auth: "implement user login and auth"
+
     match_tasks, pcd = lookup_semantic(
         tmp_path, "implement user login and auth", ["src/auth.py"], mock_embedding
     )
-    
-    # Verify we got a hit because mock_embedding returns similar vectors for similar text
+
     assert match_tasks is not None
     assert match_tasks.tasks[0].id == "T1"
-    
-    # PCD should be computed: count of similar items (2 out of 3 total) -> ~0.66
-    assert 0.0 < pcd <= 1.0
-    assert pcd >= 0.5  # Auth has a higher neighborhood density
-    
-    # Query completely unrelated: "reverse string utility"
-    unrelated_tasks, pcd_unrelated = lookup_semantic(
+
+    # Two of the three cached specs sit on the auth axis.
+    assert pcd == pytest.approx(2 / 3)
+
+    unrelated_tasks, _ = lookup_semantic(
         tmp_path, "reverse string utility", ["src/utils.py"], mock_embedding
     )
-    # Similarity should be too low to return tasks
     assert unrelated_tasks is None
 
 
 def test_atomic_notes(tmp_path: Path, mock_embedding: MockEmbeddingClient) -> None:
-    # Clear any previous session frozen state
-    clear_session_notes()
-    assert get_frozen_notes() is None
-    
+    assert get_frozen_notes(tmp_path) is None
+
     # Add 7 notes to check the limit <= 5
     for i in range(7):
         add_note(tmp_path, f"Atomic note content {i}", {"id": i}, mock_embedding)
-        
-    # Open session with goal
+
     notes = initialize_session_notes(tmp_path, "query goal", mock_embedding)
-    
-    # Verify note count is <= 5
-    assert len(notes) <= 5
-    assert len(notes) > 0
-    
-    # Add an 8th note to the database
+
+    assert 0 < len(notes) <= 5
+
+    # A note added mid-session must not join the frozen set.
     add_note(tmp_path, "New atomic note", {"id": 8}, mock_embedding)
-    
-    # Query again within the session - should return the EXACT same frozen notes
+
     notes_second = initialize_session_notes(tmp_path, "query goal", mock_embedding)
     assert notes == notes_second
     assert "New atomic note" not in notes_second
-    
-    # Clear session notes and query again - now it should include the new note/re-evaluate
-    clear_session_notes()
-    assert get_frozen_notes() is None
+
+    # Ending the session thaws the freeze, and the next open re-RAGs.
+    clear_session_notes(tmp_path)
+    assert get_frozen_notes(tmp_path) is None
     notes_reset = initialize_session_notes(tmp_path, "New atomic note", mock_embedding)
     assert "New atomic note" in notes_reset
 
@@ -178,32 +192,50 @@ def test_skills(tmp_path: Path, mock_embedding: MockEmbeddingClient) -> None:
         {"description": "Rust, optimization, performance"},
         mock_embedding,
     )
-    
-    # Search python refactoring
+
     results = search_skills(tmp_path, "Python refactoring clean code", limit=1, embedding_client=mock_embedding)
     assert len(results) == 1
     assert results[0]["name"] == "Python Refactoring"
     assert "Instructions for refactoring Python" in results[0]["content"]
 
 
-def test_calibration_warning(caplog: pytest.LogCaptureFixture) -> None:
-    # Test uncalibrated warning
-    settings.calibrated = False
-    
+def test_calibration_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """REQ-CAL-001 AC2, workspace-scoped.
+
+    The process-wide `settings.calibrated` path is kept working for pre-Task-5 callers
+    and is covered below, but the per-threshold resolution is what the ladder uses.
+    """
     with caplog.at_level(logging.WARNING):
-        check_calibration()
-        
-    warning_found = any(
-        "Thresholds (stability, cosine, PCD bars) are UNCALIBRATED" in record.message
-        for record in caplog.records
-    )
-    assert warning_found
-    
-    # Clear log and test calibrated does not warn
+        check_calibration(tmp_path)
+    assert any("UNCALIBRATED" in record.message for record in caplog.records)
+
     caplog.clear()
-    settings.calibrated = True
-    
+    directory = tmp_path / ".saltcode" / "calibration"
+    directory.mkdir(parents=True)
+    (directory / "thresholds.json").write_text(
+        '{"thresholds": {"auditor_stability_threshold": 0.62, '
+        '"semantic_cosine_threshold": 0.88, '
+        '"pcd_low_density_bar": 0.25, "pcd_high_density_bar": 0.75}}',
+        encoding="utf-8",
+    )
     with caplog.at_level(logging.WARNING):
-        check_calibration()
-        
-    assert len(caplog.records) == 0
+        check_calibration(tmp_path)
+    assert not caplog.records
+
+
+def test_process_wide_calibration_warning_still_works(caplog: pytest.LogCaptureFixture) -> None:
+    original = settings.calibrated
+    try:
+        settings.calibrated = False
+        with caplog.at_level(logging.WARNING):
+            check_calibration()
+        assert any("UNCALIBRATED" in record.message for record in caplog.records)
+
+        caplog.clear()
+        settings.calibrated = True
+        with caplog.at_level(logging.WARNING):
+            check_calibration()
+        assert not caplog.records
+    finally:
+        # Restore, so this cannot leak into another test the way it used to.
+        settings.calibrated = original

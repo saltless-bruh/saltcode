@@ -1,45 +1,1033 @@
 /**
- * Saltcode — the bridge between Pi and the Python backend.
+ * Saltcode — the bridge between Pi and the Python backend (Task 13).
  *
- * Scaffold only (Task 0.2). This file establishes the extension's shape and
- * proves the package loads; the behaviour lands in Task 13:
+ * Placement rule (`.claude/rules/project-architecture.md`): orchestration, routing, access
+ * control, session state and UI belong here; computation, validation, code execution and
+ * vector storage belong to the backend. Every handler below is wiring — the decisions live
+ * in `saltcode/*.ts` as pure functions so they can be tested without a running Pi, a
+ * model, or a container.
  *
  *   13.1  session_start / session_shutdown lifecycle + state replay
- *   13.2  registerTool for each saltcode_* backend capability
- *   13.3  on("tool_call") access control + built-in write/edit/bash override
- *   13.4  setModel / setThinkingLevel routing per design §6
- *   13.5  appendEntry state: sprint, budget, per-task counters
- *   13.6  session_before_compact — preserve ## HARD CONSTRAINTS
- *   13.7  ctx.ui widgets for phase, task deck, gate pipeline, cost
- *   13.8  registerCommand: /sprint /review /status /cost
+ *   13.2  registerTool for each saltcode_* backend capability      → saltcode/tools.ts
+ *   13.3  on("tool_call") access control + contained built-ins     → saltcode/access.ts
+ *   13.4  setModel / setThinkingLevel routing per design §6        → saltcode/routing.ts
+ *   13.5  appendEntry state: sprint, budget, per-task counters     → saltcode/state.ts
+ *   13.6  session_before_compact — preserve ## HARD CONSTRAINTS    → saltcode/constraints.ts
+ *    6.1  before_agent_start — the front-loaded stable prefix      → saltcode/prefix.ts
+ *    6.3  before_provider_request — prefix-stability instrument     → saltcode/prefix.ts
+ *   13.7  ctx.ui widgets for phase, task deck, gate pipeline, cost → saltcode/ui.ts
+ *   13.8  registerCommand: /sprint /review /status /cost           → saltcode/sprint.ts
  *   13.9  registerFlag: dry-run, builder-escalation
- *   13.10 the Phase-2 loop
+ *   13.10 the Phase-2 loop                                          → saltcode/phase2.ts
  *
- * Placement rule: orchestration, routing, access control, session state and UI
- * belong here. Computation, validation, code execution and vector storage belong
- * to the Python backend (../saltcode_backend). See design §5 and
- * .claude/rules/project-architecture.md.
+ * Note on layout: helper modules live in `extensions/saltcode/`, which Pi's loader does
+ * **not** treat as a second extension because it has no `index.ts` and no `package.json`
+ * (`discoverExtensionsInDir`). Adding either would double-register this extension.
  */
 
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  SessionStartEvent,
+import {
+  type BeforeAgentStartEvent,
+  type ExtensionAPI,
+  type ExtensionContext,
+  generateSummary,
+  type SessionBeforeCompactEvent,
+  type SessionStartEvent,
+  type ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
+import { decideAccess } from "./saltcode/access.ts";
+import { type AgentName, selectBuilderProfile } from "./saltcode/agents.ts";
+import { BackendRunner, DRY_RUN_LOG, EXIT_POSITIVE } from "./saltcode/backend.ts";
+import { describeBudget, recordEvaluatorRoute, type TaskBudget } from "./saltcode/budget.ts";
+import { registerContainedBuiltins } from "./saltcode/builtins.ts";
+import {
+  configFromToml,
+  DEFAULT_CONFIG,
+  parseTomlSubset,
+  type SaltcodeConfig,
+} from "./saltcode/config.ts";
+import {
+  extractConstraints,
+  missingConstraints,
+  retainsAllConstraints,
+  spliceConstraints,
+} from "./saltcode/constraints.ts";
+import { createContainedExec } from "./saltcode/contained.ts";
+import { createGates } from "./saltcode/gates.ts";
+import {
+  confirmationPrompt,
+  type LadderAction,
+  readConfirmation,
+  runLadder,
+} from "./saltcode/ladder.ts";
+import { runTask, type TaskSpec } from "./saltcode/phase2.ts";
+import {
+  DEFAULT_NOTES_SESSION,
+  decidePrefix,
+  describePrefix,
+  FROZEN_NOTES_PATH,
+  type FrozenPrefix,
+  fingerprintPromptOptions,
+  observePayloadPrefix,
+  parseFrozenNotes,
+} from "./saltcode/prefix.ts";
+import { ensureProfile, reconcileLocalTurn, registerProviders } from "./saltcode/providers.ts";
+import { applyRoute, describeRoute } from "./saltcode/routing.ts";
+import { openSprint, readTaskOrder, runPhase1 } from "./saltcode/sprint.ts";
+import {
+  ENTRY_BUDGET,
+  ENTRY_SPRINT,
+  ENTRY_TASK,
+  replayState,
+  type SaltcodeState,
+} from "./saltcode/state.ts";
+import { describeSpawn, spawnAgent } from "./saltcode/subagents.ts";
+import { registerBackendTools } from "./saltcode/tools.ts";
+import { type GateBoard, type GateName, type GateStatus, SaltcodeUI } from "./saltcode/ui.ts";
+import { Workspace } from "./saltcode/workspace.ts";
 
-/** Key used for this extension's footer status line. */
-const STATUS_KEY = "saltcode";
+/** Everything that is per-session. Rebuilt on `session_start`, torn down on shutdown. */
+interface Session {
+  workspace: Workspace;
+  runner: BackendRunner;
+  config: SaltcodeConfig;
+  state: SaltcodeState;
+  ui: SaltcodeUI;
+  board: GateBoard;
+  online: boolean;
+  trusted: boolean;
+  flag?: string;
+  /** Task 6: the frozen prefix, carried turn to turn so its bytes cannot drift. */
+  prefix: FrozenPrefix | null;
+  /** 6.3: the last observed payload-prefix hash. Only set when the debug flag is on. */
+  payloadHash: string | null;
+}
 
 export default function saltcode(pi: ExtensionAPI): void {
-  pi.on("session_start", (_event: SessionStartEvent, ctx: ExtensionContext): void => {
-    // Task 13.1 replaces this with: replay ctx.sessionManager.getEntries() to
-    // rebuild sprint/budget/task state, probe connectivity, register the
-    // Saltnitor provider, and start the backend daemon.
-    ctx.ui.setStatus(STATUS_KEY, "saltcode: scaffold (Task 0)");
+  let session: Session | undefined;
+
+  // ------------------------------------------------------------------ 13.9 flags
+  pi.registerFlag("dry-run", {
+    description:
+      "Walk the whole pipeline without executing anything: every backend command is logged " +
+      `to ${DRY_RUN_LOG} instead of run, and nothing outside .saltcode/ is written.`,
+    type: "boolean",
+    default: false,
+  });
+  pi.registerFlag("builder-escalation", {
+    description:
+      "Online only, default off (Task 16): allow one DeepSeek Flash rebuild of a task that " +
+      "has failed all three local attempts, before flagging a human.",
+    type: "boolean",
+    default: false,
   });
 
-  pi.on("session_shutdown", (_event, ctx: ExtensionContext): void => {
-    // Task 13.1 / 19.2: stop the backend daemon and flush session-scoped state.
-    ctx.ui.setStatus(STATUS_KEY, undefined);
+  pi.registerFlag("scope", {
+    description:
+      "Comma-separated scope paths for the spec-cache key. Given, they are used directly " +
+      "and the scope probe does not run (REQ-CACHE-002 AC2). Comma-separated rather than " +
+      "repeatable because Pi's flags are string or boolean, not arrays.",
+    type: "string",
+    default: "",
   });
+
+  pi.registerFlag("prefix-debug", {
+    description:
+      "Hash the cacheable head of every provider request to " +
+      "`.saltcode/prefix_debug.jsonl` and warn when it moves. The only way to check design " +
+      "§15's cached-prefix cost model against what the provider actually received.",
+    type: "boolean",
+    default: false,
+  });
+
+  // ------------------------------------------------------ 13.2 the backend bridge
+  // Registered at factory time so the tools exist before the first turn; the runner is
+  // resolved lazily because it needs the session's cwd, config and dry-run flag.
+  registerBackendTools(pi, {
+    runner: () => requireSession().runner,
+    get workspace() {
+      return requireSession().workspace;
+    },
+  });
+
+  /** `--scope a,b` → `["a","b"]`. Blank entries are dropped, not passed as empty paths. */
+  function splitScope(raw: unknown): string[] {
+    if (typeof raw !== "string") return [];
+    return raw
+      .split(",")
+      .map((part) => part.trim())
+      .filter((part) => part !== "");
+  }
+
+  function requireSession(): Session {
+    if (session === undefined) {
+      throw new Error(
+        "Saltcode has no session yet. Backend tools are available from session_start onward; " +
+          "if you are seeing this, the extension loaded but the session never started.",
+      );
+    }
+    return session;
+  }
+
+  // ------------------------------------------------------------- 13.1 lifecycle
+  pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext) => {
+    const workspace = new Workspace(ctx.cwd);
+    const trusted = ctx.isProjectTrusted();
+    const ui = new SaltcodeUI(ctx);
+
+    // REQ-SEC-006 AC1: project-local config is honoured only for a trusted project.
+    // Untrusted means documented defaults, said out loud — not a silent half-configuration.
+    const config = trusted ? loadConfig(workspace, ui) : { ...DEFAULT_CONFIG };
+    if (!trusted) {
+      ui.notify(
+        "Saltcode: this project is not trusted, so saltcode.toml is ignored and the built-in " +
+          "defaults apply. Phase 2 stays available but runs on the default command allowlist.",
+        "warning",
+      );
+    }
+
+    const dryRun = pi.getFlag("dry-run") === true;
+    const runner = new BackendRunner({
+      // `exactOptionalPropertyTypes` makes `{signal: undefined}` and `{}` different types,
+      // and Pi's ExecOptions takes the latter — so drop the absent keys rather than
+      // widening its signature from this side.
+      exec: (command, args, options) =>
+        pi.exec(command, args, {
+          ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+          ...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
+          ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}),
+        }),
+      python: config.python ?? "python3",
+      cwd: ctx.cwd,
+      dryRun,
+      logDryRun: (line) => workspace.append(line, "dry_run_log.txt"),
+    });
+
+    const state = replayState(ctx.sessionManager.getEntries());
+
+    session = {
+      workspace,
+      runner,
+      config,
+      state,
+      ui,
+      board: { gates: {} },
+      online: false,
+      trusted,
+      prefix: null,
+      payloadHash: null,
+    };
+
+    // 13.3 — the contained built-ins. Registered here rather than at factory time because
+    // they need ctx.cwd, and re-registering on reload is how they survive `/reload`.
+    //
+    // The writable root is the project: in interactive mode a `write` the human asked for
+    // has to land in the project, and everything else the container guarantees — no
+    // network, no $HOME, no credentials, PID namespace, limits — is unchanged. Phase 2's
+    // own writes never come through here; they arrive as a Builder diff through
+    // saltcode_sandbox_apply, whose writable root is the disposable worktree.
+    registerContainedBuiltins(pi, {
+      cwd: ctx.cwd,
+      containedExec: createContainedExec({
+        runner: () => requireSession().runner,
+        workspace,
+        writableRoot: () => ctx.cwd,
+      }),
+      allowedCommands: config.allowedCommands,
+      onRefusal: (tool, reason) => {
+        workspace.append(
+          JSON.stringify({ at: new Date().toISOString(), tool, refused: reason }),
+          "refusals.jsonl",
+        );
+        ui.notify(`${tool} refused: ${reason}`, "warning");
+      },
+    });
+
+    // Task 11.1/11.2 (G-030 gave 11.2 ownership): register the providers before anything
+    // tries to route. Saltnitor degrades to its three configured sections when the router
+    // is not up, because the *offline* path depends on those models existing — a slow
+    // router must not remove the only route that works without the network.
+    const registrations = await registerProviders(pi, {
+      ...(config.saltnitorBaseUrl !== undefined
+        ? { saltnitorBaseUrl: config.saltnitorBaseUrl }
+        : {}),
+    });
+    for (const registration of registrations) {
+      if (registration.source === "degraded")
+        ui.notify(`saltcode: ${registration.detail}`, "warning");
+    }
+
+    // REQ-GATE-001: probe connectivity once, at session open, and route from the answer.
+    session.online = await probeConnectivity(runner, ui);
+
+    render();
+    ui.status(
+      `saltcode: ${session.online ? "online" : "offline"}${dryRun ? " · dry-run" : ""}` +
+        `${state.sprint !== null ? ` · ${state.sprint.phase}` : ""}`,
+    );
+  });
+
+  pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
+    // Task 19 stops the daemon here. Nothing else is long-lived: `pi.exec` calls are
+    // per-invocation by construction, which is the point of the fallback path.
+    if (ctx.hasUI) {
+      ctx.ui.setStatus("saltcode", undefined);
+      ctx.ui.setWidget("saltcode", undefined);
+    }
+    session = undefined;
+  });
+
+  pi.on("resources_discover", (_event, _ctx) => ({
+    // Only reached when Saltcode is loaded as a bare extension rather than as an installed
+    // package; when it is installed, package.json's `pi` manifest already declares these
+    // and this returns paths Pi has resolved anyway.
+    skillPaths: ["./skills"],
+    promptPaths: ["./prompts"],
+  }));
+
+  // -------------------------------------------------- 13.3 access control backstop
+  pi.on("tool_call", (event: ToolCallEvent, _ctx: ExtensionContext) => {
+    const current = session;
+    const decision = decideAccess(
+      { toolName: event.toolName, input: (event.input ?? {}) as Record<string, unknown> },
+      {
+        agent: "top-level",
+        scope: current?.state.task?.filesAffected ?? null,
+        ...(current?.config.allowedCommands !== undefined
+          ? { allowedCommands: current.config.allowedCommands }
+          : {}),
+      },
+    );
+    if (decision.block) {
+      current?.workspace.append(
+        JSON.stringify({
+          at: new Date().toISOString(),
+          tool: event.toolName,
+          blocked: decision.reason,
+        }),
+        "refusals.jsonl",
+      );
+      return { block: true, reason: decision.reason };
+    }
+    return undefined;
+  });
+
+  // ------------------------------------------ 6.1/6.2 the front-loaded stable prefix
+  //
+  // `[system | design.md | frozen notes | per-call delta]` (REQ-PFX-001). Segments 1–3 go
+  // back as `systemPrompt`; segment 4 is the turn's own input and is left alone.
+  //
+  // The decision is `decidePrefix`, which is pure — this handler only supplies the three
+  // sources and carries the frozen record forward. That split is what makes REQ-GLB-004's
+  // byte-diff testable without a running Pi: the guarantee is a property of the function,
+  // not of the wiring.
+  pi.on("before_agent_start", (event: BeforeAgentStartEvent, _ctx: ExtensionContext) => {
+    const current = session;
+    if (current === undefined) return undefined;
+
+    const decision = decidePrefix(current.prefix, {
+      fingerprint: fingerprintPromptOptions(event.systemPromptOptions),
+      // An Architect re-loop is what re-emits design.md, so it — not a Planner re-loop —
+      // is the Evaluator pass boundary segment 2's lifetime is measured in (AC2).
+      evaluatorPass: current.state.sprint?.loops.architect ?? 0,
+      sources: {
+        systemPrompt: event.systemPrompt,
+        design: current.workspace.read("design.md"),
+        notes: parseFrozenNotes(
+          current.workspace.read(...FROZEN_NOTES_PATH),
+          DEFAULT_NOTES_SESSION,
+        ),
+      },
+    });
+
+    current.prefix = decision.frozen;
+
+    // 6.1 says to return `{ systemPrompt, message }`, and the message is returned only on
+    // a rotation. Pi converts a `custom` message into a **user** message in the provider
+    // payload (`messages.js`, `case "custom"`) whatever its `display` flag, so one emitted
+    // every turn would add billed tokens straight after the cached prefix — the opposite
+    // of what this handler exists to do — and would perturb the conversation the agent
+    // sees. Design §15's segment 4 is the turn's own input, which is already there. So the
+    // message carries the one thing nothing else can say: the cached prefix just moved,
+    // and this turn is priced accordingly.
+    if (decision.reused) return { systemPrompt: decision.prefix };
+
+    return {
+      systemPrompt: decision.prefix,
+      message: {
+        customType: "saltcode:prefix",
+        content: describePrefix(decision),
+        display: true,
+        details: decision.rotated.join("\n"),
+      },
+    };
+  });
+
+  // ------------------------------- 6.3 (debug) does the real payload prefix hold?
+  //
+  // Registered unconditionally but inert unless `--prefix-debug` is set: design §15 wants
+  // this measured, and an instrument nobody can switch on measures nothing — but one left
+  // running on every provider request is a cost of its own.
+  pi.on("before_provider_request", (event, _ctx) => {
+    const current = session;
+    if (current === undefined || pi.getFlag("prefix-debug") !== true) return undefined;
+
+    const observation = observePayloadPrefix(event.payload, current.payloadHash);
+    current.payloadHash = observation.hash;
+    current.workspace.append(
+      JSON.stringify({ at: new Date().toISOString(), ...observation }),
+      "prefix_debug.jsonl",
+    );
+    if (observation.changed) {
+      current.ui.notify(
+        `Prefix debug: the provider payload's cacheable head moved (${observation.source}, ` +
+          `${observation.bytes}B). If the extension reported the prefix as reused this turn, ` +
+          "Pi changed something ahead of segments 1-3 and the cached-prefix cost model does " +
+          "not hold as written (design §15).",
+        "warning",
+      );
+    }
+    return undefined;
+  });
+
+  // ------------------------------------------- 13.6 HARD CONSTRAINTS vs compaction
+  pi.on(
+    "session_before_compact",
+    async (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => {
+      const current = session;
+      if (current === undefined) return undefined;
+
+      const design = current.workspace.read("design.md");
+      const block = design === undefined ? undefined : extractConstraints(design);
+      if (block === undefined || block.text === "") {
+        // No active constraints: nothing to preserve, so Pi compacts as it normally would.
+        return undefined;
+      }
+
+      const model = ctx.model;
+      if (model === undefined) {
+        return cancelCompaction(current, "there is no active model to summarize with");
+      }
+
+      try {
+        const apiKey = await ctx.modelRegistry.getApiKeyForProvider(model.provider);
+        const summary = await generateSummary(
+          event.preparation.messagesToSummarize,
+          model,
+          event.preparation.settings.reserveTokens,
+          apiKey,
+          undefined,
+          event.signal,
+          event.customInstructions,
+          event.preparation.previousSummary,
+        );
+
+        // Splice the original bytes back in rather than trusting the model to have kept
+        // them. A paraphrased constraint is a lost constraint that reads as if it survived —
+        // the same reason the on-disk Spec Compactor re-splices instead of diffing prose.
+        const preserved = spliceConstraints(summary, block);
+        if (!retainsAllConstraints(preserved, block)) {
+          return cancelCompaction(
+            current,
+            `the summary would have dropped ${missingConstraints(preserved, block).length} constraint(s)`,
+          );
+        }
+
+        return {
+          compaction: {
+            summary: preserved,
+            firstKeptEntryId: event.preparation.firstKeptEntryId,
+            tokensBefore: event.preparation.tokensBefore,
+          },
+        };
+      } catch (error) {
+        return cancelCompaction(current, (error as Error).message);
+      }
+    },
+  );
+
+  function cancelCompaction(current: Session, why: string): { cancel: true } {
+    current.ui.notify(
+      `Compaction cancelled: ${why}. The active HARD CONSTRAINTS could not be guaranteed to ` +
+        "survive it (REQ-EXT-007), and losing one silently is worse than a full context.",
+      "error",
+    );
+    return { cancel: true };
+  }
+
+  // ------------------------------------------------------- 13.4 routing feedback
+  pi.on("model_select", (_event, _ctx) => {
+    updateStatus();
+  });
+  pi.on("thinking_level_select", (_event, _ctx) => {
+    updateStatus();
+  });
+
+  // ------------------------------------------------------------- 13.8 commands
+  pi.registerCommand("sprint", {
+    description: "Run one sprint: Phase 1 planning, then the Phase-2 execution loop.",
+    handler: async (args, ctx) => {
+      const current = requireSession();
+      const goal = args.trim();
+      if (goal === "") {
+        current.ui.notify('Usage: /sprint "<goal>"', "error");
+        return;
+      }
+
+      const opened = openSprint(current.state.sprint, {
+        goal,
+        online: current.online,
+        project: current.state.sprint === null ? "fresh" : "amend",
+      });
+      if (!opened.ok) {
+        current.ui.notify(opened.reason, "error");
+        return;
+      }
+
+      current.state.sprint = opened.sprint;
+      const sprint = current.state.sprint;
+
+      // ------------------------------------------------ 8.1 the cache ladder
+      // Runs BEFORE Phase 1 and stops at the first hit (REQ-CACHE-001). `--scope` comes
+      // from the flag when the human supplied one, which is what skips the probe
+      // (REQ-CACHE-002 AC2). Nothing here fires an agent except the confirmation turn a
+      // semantic candidate requires.
+      const scopeFlag = splitScope(pi.getFlag("scope"));
+      const ladder = await runLadder({
+        runner: current.runner,
+        goal,
+        online: current.online,
+        ...(scopeFlag.length > 0 ? { scope: scopeFlag } : {}),
+        ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+      });
+      current.ui.status(`saltcode: cache ladder — ${ladder.why}`);
+      if (ladder.lookup?.uncalibrated === true) {
+        current.ui.notify(
+          "Saltcode: at least one cache threshold is still provisional (REQ-CAL-001). This " +
+            "answer rests on a conservative default, not a measurement — run /calibrate once " +
+            "there are a few sprints of data.",
+          "warning",
+        );
+      }
+
+      const reuse = await resolveLadder(current, ladder, goal, ctx);
+      if (reuse.reused) {
+        // AC1/AC2: the cached plan stands. Phase 1 never fires, so `phase1Fired` stays
+        // false — a later `/sprint` in this session is still entitled to its one fire.
+        sprint.phase = "phase_gate";
+        sprint.taskOrder = reuse.taskOrder;
+        persistSprint();
+        render();
+        current.ui.notify(`Saltcode reused a cached plan: ${reuse.why}`, "info");
+      } else {
+        sprint.phase = "phase1";
+        sprint.phase1Fired = true;
+        persistSprint();
+        render();
+      }
+
+      const phase1 = reuse.reused
+        ? ({ outcome: "planned", evaluator: "pass", loops: 0 } as const)
+        : await runPhase1(goal, {
+            events: pi.events,
+            runner: current.runner,
+            workspace: current.workspace,
+            ui: current.ui,
+            route: async (agent) => {
+              const resolution = await applyRoute(
+                agent,
+                {
+                  online: current.online,
+                  project: current.state.sprint?.project ?? "fresh",
+                },
+                {
+                  pi,
+                  ctx,
+                  ...(current.config.providerFallbacks !== undefined
+                    ? { configuredFallbacks: current.config.providerFallbacks }
+                    : {}),
+                  onFallback: ({ agent: who, from, to }) =>
+                    current.workspace.append(
+                      JSON.stringify({
+                        at: new Date().toISOString(),
+                        agent: who,
+                        fallback_from: from,
+                        fallback_to: to,
+                      }),
+                      "audit_log.jsonl",
+                    ),
+                },
+              );
+              current.ui.status(describeRoute(resolution));
+              return resolution.ok ? { ok: true } : { ok: false, reason: resolution.reason };
+            },
+            onProgress: (agent, phase, detail) => {
+              current.ui.status(
+                `saltcode: ${agent} ${phase}${detail !== undefined ? ` — ${detail}` : ""}`,
+              );
+            },
+            // 8.3 — the caps live in sprint state, so charging one is a state mutation that
+            // has to be persisted before the re-loop runs. If the session dies mid-loop the
+            // counter must already be on disk, or a resume gets its two Architect attempts
+            // back and the cap stops being a cap.
+            recordLoop: (target) => {
+              const transition = recordEvaluatorRoute(sprint.loops, target);
+              sprint.loops = transition.loops;
+              persistSprint();
+              render();
+              return transition.result;
+            },
+            ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+          });
+
+      if (phase1.outcome === "stopped") {
+        flagHuman(`Phase 1 stopped at the ${phase1.agent}: ${phase1.reason}`);
+        return;
+      }
+      if (phase1.outcome === "flag_human") {
+        // REQ-EVL-003 AC1 / REQ-FAIL-003: a cap breach halts with the report, never
+        // silently. The plan on disk is the last one the Evaluator rejected.
+        flagHuman(phase1.reason);
+        return;
+      }
+
+      // ------------------------------------------------- 8.2 the Phase Gate
+      // REQ-ORC-002 AC1: on an Evaluator pass the spec locks and Phase 2 begins with no
+      // human action. `specHash` is the lock — set once, and `openSprint` refuses a second
+      // Phase-1 fire in the same sprint from here on.
+      sprint.phase = "phase_gate";
+      const tasksJson = current.workspace.read("tasks.json");
+      sprint.taskOrder =
+        reuse.reused && reuse.taskOrder.length > 0
+          ? reuse.taskOrder
+          : tasksJson === undefined
+            ? []
+            : readTaskOrder(tasksJson);
+      if (reuse.key !== "") sprint.specHash = reuse.key;
+      persistSprint();
+      render();
+
+      // ---------------------------------------------------------- Decision 1
+      const approved = await current.ui.decide(
+        1,
+        `Phase 1 produced ${current.state.sprint.taskOrder.length} task(s) for: ${goal}\n\n` +
+          "Review .saltcode/design.md and .saltcode/tasks.json. Approving starts the Phase-2 " +
+          "loop, which builds each task locally behind the static, test, faithfulness and " +
+          "regression gates.",
+      );
+      if (!approved) {
+        current.ui.notify(
+          "Sprint paused at Decision 1. The plan is on disk under .saltcode/.",
+          "info",
+        );
+        return;
+      }
+
+      current.state.sprint.phase = "phase2";
+      persistSprint();
+      await runPhase2(ctx);
+    },
+  });
+
+  /**
+   * Turn a ladder verdict into "reuse this plan" or "fire Phase 1" (8.1 · REQ-CACHE-003).
+   *
+   * The one thing that must not be shortened: a `semantic_candidate` reaches `reuse` only
+   * through an Architect confirmation that answered yes. Everything else here — an
+   * unspawnable Architect, an unparseable answer, a cached plan with no readable tasks —
+   * falls through to Phase 1, because the cost of being wrong is asymmetric. A wrong reuse
+   * builds against a plan for different work and every later gate validates it faithfully;
+   * a wrong fall-through costs one planning pass.
+   */
+  async function resolveLadder(
+    current: Session,
+    ladder: LadderAction,
+    goal: string,
+    ctx: ExtensionContext,
+  ): Promise<{ reused: boolean; why: string; taskOrder: string[]; key: string }> {
+    const key = ladder.lookup?.key ?? "";
+    const fire = (why: string) => ({ reused: false, why, taskOrder: [] as string[], key: "" });
+
+    if (ladder.action === "fire") return fire(ladder.why);
+
+    if (ladder.action === "confirm") {
+      const spawn = await spawnAgent(pi.events, "architect", {
+        task: confirmationPrompt(goal, ladder.bar, ladder.lookup.tasks),
+        cwd: current.workspace.root,
+        ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+      });
+      if (!spawn.ok) {
+        return fire(
+          `the Architect confirmation could not run (${describeSpawn("architect", spawn)}), so ` +
+            "the cached plan is not reused — REQ-CACHE-003 AC1 makes the confirmation the " +
+            "condition of reuse, and skipping it because it failed would invert that",
+        );
+      }
+      const answer = readConfirmation(spawn.output ?? "");
+      if (!answer.confirmed) return fire(`the Architect declined the cached plan: ${answer.why}`);
+    }
+
+    // Either an exact hit, a configured `skip`, or a confirmed candidate.
+    const taskOrder = readTaskOrder(JSON.stringify(ladder.lookup.tasks ?? {}));
+    if (taskOrder.length === 0) {
+      return fire(
+        `the cache returned a plan with no readable tasks (key ${key.slice(0, 12)}), so it ` +
+          "cannot be reused; firing Phase 1",
+      );
+    }
+    return { reused: true, why: ladder.why, taskOrder, key };
+  }
+
+  pi.registerCommand("status", {
+    description: "Show the current sprint, task, budget and gate state.",
+    handler: async (_args, _ctx) => {
+      const current = requireSession();
+      const { sprint, budget } = current.state;
+      const lines = [
+        sprint === null
+          ? "no sprint"
+          : `sprint ${sprint.sprintId} · phase ${sprint.phase} · ${sprint.goal}`,
+        sprint === null ? "" : `tasks ${sprint.completed.length}/${sprint.taskOrder.length}`,
+        budget === null ? "no task in flight" : describeBudget(budget),
+        `connectivity: ${current.online ? "online" : "offline"}`,
+        `auto_mode: ${current.config.autoMode ?? "off"} · auto_push: ${current.config.autoPush === true}`,
+        current.runner.dryRun ? "dry-run: nothing executes" : "",
+        current.flag !== undefined ? `FLAG HUMAN: ${current.flag}` : "",
+      ].filter((line) => line !== "");
+      current.ui.notify(lines.join("\n"), "info");
+    },
+  });
+
+  pi.registerCommand("cost", {
+    description: "Show what this sprint has cost in API calls.",
+    handler: async (_args, _ctx) => {
+      const current = requireSession();
+      current.ui.notify(
+        "Phase 2 runs entirely on local models at $0 API cost. The billable surface is the " +
+          "single Phase-1 fire plus any Auditor Flash re-judgment. Per-turn accounting comes " +
+          "from Pi's own usage totals (/session); Saltcode does not double-count them here.",
+        "info",
+      );
+    },
+  });
+
+  pi.registerCommand("review", {
+    description: "Surface the cumulative diff for human review, with the integration notice.",
+    handler: async (_args, _ctx) => {
+      const current = requireSession();
+      const diff = await pi.exec("git", ["diff", "HEAD"], {});
+      const body =
+        diff.stdout.trim() === ""
+          ? "The working tree matches HEAD — nothing to review."
+          : `${diff.stdout.slice(0, 8000)}${diff.stdout.length > 8000 ? "\n… (truncated; run `git diff` for the rest)" : ""}`;
+      await current.ui.decide(3, body);
+    },
+  });
+
+  // --------------------------------------------------------- 13.10 the Phase-2 loop
+  async function runPhase2(ctx: ExtensionContext): Promise<void> {
+    const current = requireSession();
+    const sprint = current.state.sprint;
+    if (sprint === null) return;
+
+    const tasksJson = current.workspace.read("tasks.json");
+    const specs = tasksJson === undefined ? [] : readTaskSpecs(tasksJson);
+    const gates = createGates({
+      runner: current.runner,
+      workspace: current.workspace,
+      events: pi.events,
+      online: current.online,
+      signal: () => ctx.signal,
+    });
+
+    for (const spec of specs) {
+      if (sprint.completed.includes(spec.id)) continue;
+
+      current.state.task = {
+        taskId: spec.id,
+        status: "building",
+        filesAffected: spec.filesAffected,
+        complexity: spec.complexity,
+      };
+      pi.appendEntry(ENTRY_TASK, current.state.task);
+
+      // The Builder's profile, per the VRAM triangle. The token estimate is deliberately
+      // coarse — it selects a context window, not a model.
+      const profile = selectBuilderProfile({
+        complexity: spec.complexity,
+        escalated: false,
+        estimatedInputTokens: estimateTaskTokens(spec),
+        aFocusThreshold: current.config.aFocusThreshold ?? 32768,
+      });
+      // REQ-MOD-004/005: one local model is resident at a time, so the tier has to be
+      // made resident before inference rather than discovered mid-turn. An OOM refusal
+      // stops the task for a human — the box is healthy and the plan is what must change.
+      const resident = await ensureProfile(profile, {
+        ...(current.config.saltnitorBaseUrl !== undefined
+          ? { baseUrl: current.config.saltnitorBaseUrl }
+          : {}),
+        ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+      });
+      if (!resident.ok && resident.flagHuman) {
+        flagHuman(resident.reason);
+        current.state.task.status = "flagged";
+        pi.appendEntry(ENTRY_TASK, current.state.task);
+        return;
+      }
+      if (!resident.ok) {
+        current.ui.notify(`saltcode: ${resident.reason}`, "warning");
+      }
+
+      await routeAgent("builder", { builderProfile: profile }, ctx);
+
+      // REQ-MOD-006: reconcile the turn against the VRAM triangle *after* routing, so the
+      // level Pi actually holds is the one that fits. `mtp_enabled` is opt-in and off by
+      // default (design §6 — Tier A's MTP is finicky until benchmarked on this build).
+      const { adjustments } = reconcileLocalTurn({
+        profile,
+        thinking: pi.getThinkingLevel(),
+        mtpEnabled: current.config.mtpEnabled === true,
+      });
+      for (const adjustment of adjustments) {
+        // Named, never silent: a Builder turn that quietly stopped reasoning is the kind
+        // of degradation nobody attributes to the right cause.
+        current.ui.notify(`saltcode: ${spec.id} — ${adjustment}`, "info");
+      }
+
+      const outcome = await runTask(spec, {
+        gates,
+        online: current.online,
+        // Provisional until Task 14b measures it; REQ-AUD-005 AC1's conservative default.
+        auditorStabilityThreshold: 0.5,
+        onGate: (gate, status) => {
+          setGate(gate, status);
+        },
+        onBudget: (budget) => {
+          persistBudget(budget);
+        },
+        onFlagHuman: (reason) => flagHuman(reason),
+      });
+
+      if (outcome.outcome === "flagged") {
+        current.state.task.status = "flagged";
+        pi.appendEntry(ENTRY_TASK, current.state.task);
+        return;
+      }
+
+      // Task 17 + 18 attach here: regression gate, then commit + checkpoint. Until they
+      // land, the diff is applied and UNCOMMITTED, which is design §10.1's intended state
+      // between apply_live and the checkpoint — not an oversight.
+      current.state.task.status = "passed";
+      sprint.completed.push(spec.id);
+      pi.appendEntry(ENTRY_TASK, current.state.task);
+      persistSprint();
+      render();
+    }
+
+    sprint.phase = "complete";
+    persistSprint();
+    render();
+
+    // ------------------------------------------------------------ Decisions 3 and 4
+    const reviewed = await current.ui.decide(
+      3,
+      `All ${sprint.completed.length} task(s) passed their gates and are applied to the working ` +
+        "tree, uncommitted. Review `git diff` before shipping.",
+    );
+    if (!reviewed) {
+      current.ui.notify(
+        "Sprint held at Decision 3. The changes are in the tree, uncommitted.",
+        "info",
+      );
+      return;
+    }
+    await current.ui.decide(
+      4,
+      "Ship this sprint? Saltcode does not push. `auto_push` is off unless you set it, in " +
+        "every run mode.",
+    );
+  }
+
+  async function routeAgent(
+    agent: AgentName,
+    extra: { builderProfile?: "A_STD" | "A_FOCUS" | "B" },
+    ctx: ExtensionContext,
+  ): Promise<void> {
+    const current = requireSession();
+    const resolution = await applyRoute(
+      agent,
+      {
+        online: current.online,
+        project: current.state.sprint?.project ?? "fresh",
+        ...(extra.builderProfile !== undefined ? { builderProfile: extra.builderProfile } : {}),
+      },
+      {
+        pi,
+        ctx,
+        ...(current.config.providerFallbacks !== undefined
+          ? { configuredFallbacks: current.config.providerFallbacks }
+          : {}),
+        onFallback: ({ agent: who, from, to }) =>
+          current.workspace.append(
+            JSON.stringify({
+              at: new Date().toISOString(),
+              agent: who,
+              fallback_from: from,
+              fallback_to: to,
+            }),
+            "audit_log.jsonl",
+          ),
+      },
+    );
+    if (!resolution.ok) flagHuman(resolution.reason);
+    else current.ui.status(describeRoute(resolution));
+  }
+
+  // ------------------------------------------------------------------- helpers
+  function setGate(gate: GateName, status: GateStatus): void {
+    const current = session;
+    if (current === undefined) return;
+    current.board.gates[gate] = status;
+    render();
+  }
+
+  function persistSprint(): void {
+    const current = session;
+    if (current?.state.sprint == null) return;
+    pi.appendEntry(ENTRY_SPRINT, current.state.sprint);
+  }
+
+  function persistBudget(budget: TaskBudget): void {
+    const current = session;
+    if (current === undefined) return;
+    current.state.budget = budget;
+    // REQ-ORC-005 AC1: every counter change is appended, so the trail shows what was spent
+    // and when. Nothing here ever writes a lower number than it read.
+    pi.appendEntry(ENTRY_BUDGET, budget);
+    render();
+  }
+
+  function flagHuman(reason: string): void {
+    const current = session;
+    if (current === undefined) return;
+    current.flag = reason;
+    if (current.state.sprint !== null) {
+      current.state.sprint.phase = "flagged";
+      persistSprint();
+    }
+    current.ui.flagHuman(reason);
+    current.workspace.append(
+      JSON.stringify({ at: new Date().toISOString(), flag_human: reason }),
+      "audit_log.jsonl",
+    );
+    render();
+  }
+
+  function render(): void {
+    const current = session;
+    if (current === undefined) return;
+    current.ui.widget({
+      sprint: current.state.sprint,
+      budget: current.state.budget,
+      board: current.board,
+      ...(current.flag !== undefined ? { flag: current.flag } : {}),
+    });
+  }
+
+  function updateStatus(): void {
+    const current = session;
+    if (current === undefined) return;
+    const sprint = current.state.sprint;
+    current.ui.status(
+      `saltcode: ${current.online ? "online" : "offline"}${sprint !== null ? ` · ${sprint.phase}` : ""}`,
+    );
+  }
+}
+
+function loadConfig(workspace: Workspace, ui: SaltcodeUI): SaltcodeConfig {
+  const source =
+    workspace.readWorkspaceFile("saltcode.toml") ?? workspace.read("config.toml") ?? undefined;
+  if (source === undefined) return { ...DEFAULT_CONFIG };
+  try {
+    return configFromToml(parseTomlSubset(source));
+  } catch (error) {
+    // Fail loudly to defaults. A config key that quietly fails to apply is worse than no
+    // config: the allowlist, the tier threshold and the run mode all look configured.
+    ui.notify(
+      `saltcode.toml could not be read (${(error as Error).message}). Falling back to built-in ` +
+        "defaults — the command allowlist, thresholds and run mode are NOT what the file says.",
+      "error",
+    );
+    return { ...DEFAULT_CONFIG };
+  }
+}
+
+async function probeConnectivity(runner: BackendRunner, ui: SaltcodeUI): Promise<boolean> {
+  try {
+    const result = await runner.call("connectivity", []);
+    return result.code === EXIT_POSITIVE && result.payload.online === true;
+  } catch (error) {
+    // Being unable to probe is not being offline, but routing has to pick one. Offline is
+    // the answer that cannot leak: it keeps Phase 1 on Tier B and the Auditor local.
+    ui.notify(
+      `Connectivity probe failed (${(error as Error).message}); assuming offline. Phase 1 will ` +
+        "plan on Saltnitor Tier B and the Auditor stays local.",
+      "warning",
+    );
+    return false;
+  }
+}
+
+/** `tasks.json` → the specs the Phase-2 loop builds. Unknown shapes yield nothing. */
+export function readTaskSpecs(json: string): TaskSpec[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  const raw =
+    parsed !== null && typeof parsed === "object" && "tasks" in parsed
+      ? (parsed as { tasks: unknown }).tasks
+      : parsed;
+  if (!Array.isArray(raw)) return [];
+
+  const specs: TaskSpec[] = [];
+  for (const item of raw) {
+    if (item === null || typeof item !== "object") continue;
+    const task = item as Record<string, unknown>;
+    if (typeof task.id !== "string") continue;
+    const complexity = task.complexity;
+    specs.push({
+      id: task.id,
+      description: typeof task.description === "string" ? task.description : "",
+      filesAffected: Array.isArray(task.files_affected)
+        ? task.files_affected.filter((f): f is string => typeof f === "string")
+        : [],
+      complexity:
+        complexity === "low" || complexity === "medium" || complexity === "high"
+          ? complexity
+          : "medium",
+      ...(Array.isArray(task.acceptance_criteria)
+        ? {
+            acceptanceCriteria: task.acceptance_criteria.filter(
+              (c): c is string => typeof c === "string",
+            ),
+          }
+        : {}),
+    });
+  }
+  return specs;
+}
+
+/**
+ * A coarse token estimate for the A_STD/A_FOCUS choice (design §6).
+ *
+ * Deliberately crude — chars/4 over the task object and its file list. It picks a context
+ * window, and being wrong costs a larger window than needed, not a wrong answer.
+ */
+function estimateTaskTokens(spec: TaskSpec): number {
+  const text = [spec.description, ...spec.filesAffected, ...(spec.acceptanceCriteria ?? [])].join(
+    " ",
+  );
+  return Math.ceil(text.length / 4);
 }

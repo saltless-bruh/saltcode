@@ -36,6 +36,7 @@ from saltcode.tools._cli import (
     EXIT_VERDICT_NEGATIVE,
     emit,
     fail,
+    parse_cli,
 )
 
 if TYPE_CHECKING:
@@ -67,10 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    try:
-        args = parser.parse_args(argv)
-    except SystemExit:
-        return EXIT_USAGE
+    args, code = parse_cli(parser, argv, TOOL)
+    if args is None:
+        # `--help` (code 0) or a usage error whose JSON envelope parse_cli
+        # already emitted. Either way there is nothing further to run.
+        return code
 
     if args.timeout <= 0:
         return fail(TOOL, "UsageError", "--timeout must be greater than zero.", code=EXIT_USAGE)

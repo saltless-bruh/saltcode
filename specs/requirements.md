@@ -247,7 +247,20 @@ The semantic cosine threshold SHALL be calibrated via the measured-then-fixed pr
 - AC3: IF PCD is below the low-density bar, THEN require full confirmation or fall through to Phase 1.
 - AC4: The cosine threshold and PCD bars SHALL be stored in project config with a `calibrated: bool` flag.
 - AC5: WHEN no calibration data exists (first sprint), `semantic_cosine_threshold` SHALL default to `0.85` and PCD bars SHALL require full Architect confirmation (max skepticism), marked `calibrated: false` (mirrors REQ-AUD-005 AC1 for the Auditor's 0.5 default).
+- AC6: The PCD bars SHALL be estimated as **quartiles of the PCD distribution observed over the calibration set** — low bar = the 0.25 quantile, high bar = the 0.75 quantile — with each query held out of its own corpus. "Dense" and "sparse" are therefore relative to the project's own cache, not to an absolute count.
 - **Trace:** design §11.2, §11.9, §15; v8 [11].
+
+> **Added 2026-08-02 (G-022).** Design §11.9 listed the PCD bars among the things
+> `saltcode_calibrate` measures and said nothing about how; AC2/AC3 describe only the
+> *consequences* of landing above or below them. So unlike the Auditor bar (max-F1,
+> REQ-AUD-005) and the cosine bar (just above the highest non-match), the density bars had
+> no rule to implement. AC6 ratifies quartiles — the smallest reading consistent with what
+> PCD is for — and the hold-out, which matters because runtime PCD always sees a goal that
+> is not yet cached, so self-inclusion would add a systematic 1/n. **Known limitation:**
+> quartiles are dominated by a handful of values on a small calibration set. AC5 keeps the
+> bars inert while uncalibrated, so a poor estimate cannot cause a false reuse before it
+> has been measured — but it can afterwards, and that is the argument for a calibration set
+> of real size before trusting them.
 
 ---
 
@@ -306,7 +319,17 @@ SHALL validate `task_id`, `status ∈ {pass,fail}`, `reason ∈ {pass,impl_fail,
 - AC1: `reason=pass` IFF `status=pass`; `reason=spec_defect` SHALL set `next_action=test_intent_respec`.
 - AC2: `stability_score` SHALL equal `1.0 - (verdict_changes / (n_passes - 1))`.
 - AC3: `verdicts` length SHALL equal `n_passes`.
+- AC4: `gac` SHALL be **1-based** — the pass number, counting from 1, at which the verdict last settled. A run whose verdict never settles SHALL report its final pass (a length-1 suffix is trivially constant), so `gac ∈ [1, n_passes]`.
 - **Trace:** design §9.
+
+> **Added 2026-08-02 (G-020).** Proposal v8 line 397 defines `gac` only as "pass where
+> verdict first stabilizes" and design §9 repeats the phrase; neither says whether passes
+> count from 0 or 1, nor what a never-settling run reports. The constraint was `int ≥ 0`,
+> which admits both readings — and unlike `stability_score`, whose formula AC2 re-derives,
+> nothing cross-checked `gac` at all. AC4 fixes the smaller reading consistent with the
+> surrounding design: 1-based, matching how `n_passes` counts. Nothing routes on `gac`
+> today (escalation reads `stability_score`), which is exactly why an off-by-one here
+> could have survived unnoticed into Task 14b's calibration set.
 
 ---
 
@@ -520,8 +543,20 @@ Builder diffs SHALL never create/edit/delete anything under `tests/**`.
 
 ### REQ-AUD-001 — Faithfulness gate (heuristics + judgment)
 Auditor SHALL run zero-cost heuristics then a judgment pass on every clean diff. Heuristics SHALL flag: return literals matching test fixtures; empty/throw-only bodies under test; branches keyed on known test inputs.
-- AC1: WHEN a heuristic flag fires, THEN the verdict SHALL be `gaming_suspected` unless judgment clears it.
+- AC1: WHEN a heuristic flag fires, THEN the verdict SHALL be `gaming_suspected` unless judgment clears it — **except that a judgment of `spec_defect` SHALL win over the flag.**
 - **Trace:** design §9, §10.
+
+> **Amended 2026-08-02 (G-021).** AC1 previously read "unless judgment clears it" with no
+> exception, and was implemented literally: any verdict other than `pass` left
+> `gaming_suspected` standing. For `impl_fail` that is harmless — both route to a Builder
+> retry and the gaming reason carries more detail. For **`spec_defect` it directly
+> contradicted REQ-AUD-003 AC1** ("`spec_defect` SHALL NOT consume a Builder retry") and
+> Proposal v8 lines 499 and 656 ("`spec_defect` ⇒ Test Intent re-run … *not a retry*"), by
+> spending one of the three retries and sending the Builder to fix code whose *tests* the
+> Auditor believes are wrong. Two requirements cannot both hold, and the proposal
+> adjudicates: the carve-out above is what it already said. Rationale: a heuristic flag
+> says the code looks like it games the tests; `spec_defect` says those tests should not be
+> trusted — the more fundamental claim, and the one that makes the flag's premise moot.
 
 ### REQ-AUD-002 — Escalation policy (stability-based, BIFAI-NET v5.2)
 The Auditor SHALL measure confidence via **multi-pass stability**, not self-assessment. `saltcode_stability` SHALL run the judgment N times (default N=3) with varied conditions (temperature jitter, evidence reordering) and compute `stability_score = 1.0 - (verdict_changes / (N-1))` and `gac`. The escalation threshold SHALL be set by the measured-then-fixed protocol (REQ-AUD-005), not guessed.

@@ -16,7 +16,10 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
 
-    // Pi loads .ts directly via jiti — type-checking gates CI, nothing is built.
+    // Pi loads .ts directly via jiti — type-checking gates CI, nothing is built. Because
+    // nothing is built, imports carry the `.ts` extension the runtime actually resolves;
+    // Pi's own packages ship `.d.ts` files written the same way.
+    "allowImportingTsExtensions": true,
     "noEmit": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,

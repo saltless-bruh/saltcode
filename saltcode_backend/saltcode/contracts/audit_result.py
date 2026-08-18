@@ -7,7 +7,10 @@ class StabilityInfo(BaseModel):
     n_passes: int = Field(..., ge=1)
     verdicts: list[str] = Field(default_factory=list)
     stability_score: float = Field(..., ge=0.0, le=1.0)
-    gac: int = Field(..., ge=0)
+    # 1-based, per REQ-CON-006 AC4 (added 2026-08-02, G-020). The old `ge=0` admitted both
+    # a 0-based and a 1-based reading, and nothing cross-checked the field — unlike
+    # `stability_score`, whose formula is re-derived below.
+    gac: int = Field(..., ge=1)
 
     @model_validator(mode="after")
     def validate_stability(self) -> "StabilityInfo":
@@ -15,6 +18,11 @@ class StabilityInfo(BaseModel):
             raise ValueError(
                 f"verdicts length ({len(self.verdicts)}) must equal n_passes ({self.n_passes})"
             )
+
+        if self.gac > self.n_passes:
+            # REQ-CON-006 AC4 bounds it to [1, n_passes]: a run cannot settle on a pass it
+            # never made, and a never-settling run reports its final pass.
+            raise ValueError(f"gac ({self.gac}) cannot exceed n_passes ({self.n_passes})")
         
         if self.n_passes <= 1:
             expected_score = 1.0
