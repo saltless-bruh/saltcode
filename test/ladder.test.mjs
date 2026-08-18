@@ -137,7 +137,10 @@ test("a garbage payload parses to unreadable, never to a hit", () => {
 test("a fully calibrated threshold set does not raise the warning", () => {
   const parsed = ladder.parseCacheLookup({
     code: 0,
-    payload: { verdict: "miss", thresholds: { semantic_cosine: { value: 0.85, calibrated: true } } },
+    payload: {
+      verdict: "miss",
+      thresholds: { semantic_cosine: { value: 0.85, calibrated: true } },
+    },
   });
   assert.equal(parsed.uncalibrated, false);
 });
