@@ -22,7 +22,10 @@ export interface SaltcodeConfig {
   python?: string;
   /** REQ-STAT-004 / design §14: how the project runs one task spec. */
   testRunnerCmd?: string;
-  /** The full suite for the regression gate (Task 17). */
+  /**
+   * The full suite for the regression gate (Task 17). Read from `[checkpoint]`, which is
+   * where design §10.1's config block puts it.
+   */
   regressionCmd?: string;
   language?: string;
   /** design §6: above this many estimated input tokens the Builder uses A_FOCUS. */
@@ -172,7 +175,6 @@ export function configFromToml(table: TomlTable): SaltcodeConfig {
   const project = section(table, "project");
   assignString(project, "language", (v) => (config.language = v));
   assignString(project, "test_runner_cmd", (v) => (config.testRunnerCmd = v));
-  assignString(project, "regression_cmd", (v) => (config.regressionCmd = v));
   assignString(project, "python", (v) => (config.python = v));
 
   const security = section(table, "security");
@@ -200,6 +202,11 @@ export function configFromToml(table: TomlTable): SaltcodeConfig {
   assignString(providers, "saltnitor_base_url", (v) => (config.saltnitorBaseUrl = v));
 
   const checkpoint = section(table, "checkpoint");
+  // design §10.1's config block: `[checkpoint] regression_cmd`. This used to read
+  // `[project]`, which meant the backend's `saltcode.tools.regression` and the extension
+  // disagreed about where the setting lives — the extension would have shown "no full
+  // suite" for a project that had configured one, and vice versa.
+  assignString(checkpoint, "regression_cmd", (v) => (config.regressionCmd = v));
   const mode = checkpoint?.auto_mode;
   if (mode === "off" || mode === "hybrid" || mode === "full") config.autoMode = mode;
   if (typeof checkpoint?.auto_push === "boolean") config.autoPush = checkpoint.auto_push;

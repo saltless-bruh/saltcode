@@ -592,11 +592,78 @@ Legend: `- [ ]` open · `- [x]` done · **Satisfies** = REQ ids · **Done when**
 - **Done when:** with the flag OFF or offline, no Flash Builder call occurs and budget exhaustion flags human; with the flag ON + online, a 3×-failed task gets exactly one Flash rebuild attempt.
 
 ## Task 17 — Checkpoint backend: regression runner + commit/snapshot + rollback  ·  deps: 9, 10  ·  [NEW]
-- [ ] 17.1 `regression.py` (or extend `test_run`): run the FULL suite (`regression_cmd`) on the live tree inside the container; `pass | fail(output)`; SKIP if unconfigured. Entrypoint `saltcode.tools.regression`.
-- [ ] 17.2 `checkpoint.py`: git commit (message from task id + description) + write the checkpoint record. Entrypoint `saltcode.tools.checkpoint`.
-- [ ] 17.3 `rollback.py`: `git reset --hard <sha>` + report; refuse (or require force) if uncommitted non-Saltcode changes are present. Entrypoint `saltcode.tools.rollback`.
+- [x] 17.1 `regression.py` (or extend `test_run`): run the FULL suite (`regression_cmd`) on the live tree inside the container; `pass | fail(output)`; SKIP if unconfigured. Entrypoint `saltcode.tools.regression`.
+- [x] 17.2 `checkpoint.py`: git commit (message from task id + description) + write the checkpoint record. Entrypoint `saltcode.tools.checkpoint`.
+- [x] 17.3 `rollback.py`: `git reset --hard <sha>` + report; refuse (or require force) if uncommitted non-Saltcode changes are present. Entrypoint `saltcode.tools.rollback`.
 - **Satisfies:** REQ-CKP-001, REQ-CKP-002, REQ-CKP-009, REQ-SEC-001 (regression in container).
 - **Done when:** the full suite runs green / fails correctly on the live tree via subprocess; a checkpoint commit + record is produced; rollback resets to a named sha and refuses on a dirty non-Saltcode tree; correct exit codes throughout.
+
+  > **Done when — every leg, and how.** The full suite runs **green and red on the live
+  > tree via subprocess** (`test_regression_entrypoint_green_then_red_via_subprocess`,
+  > against the real bwrap container). A **checkpoint commit + record** is produced
+  > (`test_a_checkpoint_commits_and_records`; `commit_sha` is asserted against
+  > `git rev-parse HEAD`). **Rollback resets to a named sha** and **refuses on a dirty
+  > non-Saltcode tree** (`test_rollback_resets_to_a_named_sha`,
+  > `test_rollback_refuses_a_dirty_non_saltcode_tree` — the refusal asserts the tree is
+  > unchanged, not just that `ok` is false). **Exit codes throughout**: the three new
+  > entrypoints joined the Task 7b roster, so all eight conformance invariants are applied
+  > to them automatically, plus per-tool assertions for `0`/`1`/`2`.
+
+  > **The regression gate binds its own toolchain, exactly as the task-spec runner does.**
+  > The first end-to-end run returned `fail` with `bwrap: execvp pytest: No such file or
+  > directory` — a **green suite reported as a red tree**. `CONTAINER_ENV` sets `PATH` to
+  > `/usr/local/bin:/usr/bin:/bin` and `/home` is never bound, so a virtualenv `pytest`
+  > is simply absent. `run_regression` now calls `resolve_tool` / `container_env_for` /
+  > `ro_binds_for` — the same three calls `static_gate/test_runner.py` already uses — and
+  > returns `unavailable`, not `fail`, when the runner is not installed at all.
+
+  > **Two outcomes that are deliberately not `fail`.** A non-allowlisted `regression_cmd`
+  > and a missing runner both mean **nothing ran**, so they report `unavailable`. Routing
+  > either as a red suite would send a Builder to fix code that was never tested. Likewise
+  > `skipped` is not `pass`: `RegressionResult.ok` is true only for `pass`, and the
+  > entrypoint's `checkpoint_regression` key maps `skipped`/`unavailable` to `unverified`
+  > so the two tools cannot disagree about what a skip means (REQ-CKP-002 AC3).
+
+  > **A checkpoint never commits `.saltcode/`, and the first run proved why.** With
+  > `git add -A`, the checkpoint ledger entered the project's history; the next
+  > `git reset --hard` reset past it and **deleted the whole checkpoint history**, leaving
+  > resume (REQ-CKP-008) with nothing to match `git HEAD` against. `STAGE_PATHSPEC` now
+  > excludes `.saltcode`, and `rollback` reads the ledger **before** the reset so the
+  > rewind is correct even where some other tool tracks that directory. Recorded as
+  > **G-035**.
+
+  > **Refusals are verdicts, not exceptions.** `CheckpointRefusedError` separates "the bar
+  > said no" (a failed regression, an empty apply → exit `1`) from "git is broken" (exit
+  > `3`); collapsing them would make the loop unable to tell a task that did not qualify
+  > from a tool that crashed. `rollback` returns `ok: false` for the same reason.
+
+  > **What blocks a rollback is what the reset would actually destroy** — not whether
+  > `git status` is empty. `git reset --hard` destroys tracked modifications and moves the
+  > branch but leaves untracked files alone, so refusing on a stray build artifact would
+  > refuse on something the reset could not have harmed. Tracked, dirty paths outside
+  > `.saltcode/` block; `.saltcode/` paths and untracked files are reported and do not.
+  > `--force` is the loop's normal path after a failed regression, where the extension
+  > knows the dirty tree is the uncommitted `apply_live` it is meant to discard. A
+  > `commit_sha` the repository has never seen is refused and is **not** forceable.
+
+  > **Superseded records are archived, never deleted** — `.saltcode/checkpoints.rolled_back.jsonl`
+  > with a `superseded_by_rollback_to` field — so `latest_record` stops returning a
+  > rolled-away commit without losing the evidence that the work happened.
+
+  > **Two spec issues surfaced rather than coded around.** design §10.1 says
+  > `regression_cmd` defaults to "the full `test_runner_cmd` with no task filter" and its
+  > own config block says empty → SKIPPED; REQ-CKP-002 AC3 is unambiguous and
+  > `requirements.md` outranks `design.md`, so the SKIP is implemented and the drift is
+  > **G-032**. And `extensions/saltcode/config.ts` read `regression_cmd` from `[project]`
+  > while design §10.1 puts it under `[checkpoint]` — the two halves would have disagreed
+  > about whether a project had a full suite at all, so it was corrected here with a test
+  > pinning the section.
+
+  > **Verification:** from `saltcode_backend/`: `ruff check .` · `pyright` ·
+  > `pytest -q` (**865 passed, 1 skipped** — G-013's honest `limits_enforced=false` on a
+  > systemd-less host; 811 → 865 is Task 17's 30 tests plus 24 new parametrised 7b cases).
+  > Extension lane: `npm run typecheck` · `npm run lint` · `npm run test:agents`
+  > (**107 passed**). 2026-08-18.
 
 ## Task 18 — Auto-advance loop + checkpoint state + run modes (extension)  ·  deps: 13, 17  ·  [NEW]
 - [ ] 18.1 Wrap the Phase-2 loop (13.10): after `saltcode_apply_live`, call `saltcode_regression`; on pass → `saltcode_checkpoint` + `pi.appendEntry("saltcode:checkpoint", …)` → next task; on fail → discard the uncommitted apply (reset to last checkpoint) and route per REQ-CKP-003. Never advance past an un-checkpointed task.

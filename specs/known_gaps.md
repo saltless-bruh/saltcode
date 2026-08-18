@@ -617,6 +617,12 @@ rule, apply it to all five, and add the missing conformance probe — but the en
 belong to Tasks 9/10/12/14b, so Task 7b reports it rather than editing them
 (`.claude/rules/stop-and-ask.md`).
 
+*Update (Task 17, 2026-08-18):* the roster is now seventeen. `checkpoint --in` is the only
+new entrypoint that reads a caller-supplied file, and it reports `2` — following
+`apply_live`, whose `--in` it mirrors exactly. So the split is 2 modules at `3` against 4
+at `2`; the majority reading is "a caller-supplied path is a usage error", which is the
+rule to standardise on when someone picks one.
+
 ### - [x] G-027 — The Builder skill sends the Builder to the wrong directory for its spec
 **Severity:** MED · **Noticed:** Task 7.2 · **Closed:** 2026-08-02 ·
 
@@ -815,6 +821,97 @@ section before the first pass and report which one it used, exactly as it alread
 `escalation`. That is where the model choice lives. Raised rather than worked around,
 because the alternative — having the extension guess the Auditor's section — encodes the
 same choice in two places, which is the failure DD-16 already cost this project once.
+
+### - [ ] G-032 — design §10.1 and REQ-CKP-002 AC3 disagree about an unset `regression_cmd`
+**Severity:** LOW · **Noticed:** Task 17.1 · **Closed by:** a `design.md` §10.1 amendment
+(spec-owner work, not code) · **Where:** `specs/design.md` §10.1,
+`specs/requirements.md` REQ-CKP-002 AC3, `saltcode/checkpoint/regression.py`
+
+design §10.1 describes the regression gate as running "`regression_cmd`, **default = the
+full `test_runner_cmd` with no task filter**" — and then, four paragraphs later, its
+config block says `regression_cmd = ""  # empty → regression gate SKIPPED`. The two
+readings give different code: one derives a command, the other runs nothing.
+
+**Resolved by the hierarchy, not by invention.** REQ-CKP-002 AC3 is unambiguous — *"WHEN
+no `regression_cmd` is configured, the gate SHALL be SKIPPED"* — and `requirements.md`
+outranks `design.md` (`.claude/rules/source-of-truth.md`). Task 17 implements the SKIP and
+says so in the module docstring and in `docs/entrypoints.md`.
+
+The parenthetical is also not implementable as written: "with no task filter" means
+stripping a filter out of an arbitrary command string, which for `pytest -q
+tests/task_T1_spec.py` is obvious and for `npm test -- --grep T1` is guesswork. Deriving
+it would be exactly the invented behaviour the rules forbid.
+
+*Why it matters:* only as drift — the code is right and the requirement is right, but a
+reader who starts from design §10.1 will expect a fallback that does not exist. The fix is
+one sentence in `design.md`: strike the parenthetical, or restate it as advice about what
+to *put* in `regression_cmd` rather than as a default the system applies.
+
+### - [ ] G-033 — Regression-fail routing rests on a text-scraping heuristic
+**Severity:** MED · **Noticed:** Task 17.1 · **Closed by:** Task 18.1 (which must honour
+`attributable`), or a later task that makes runners report failures structurally ·
+**Where:** `saltcode_backend/saltcode/checkpoint/regression.py::extract_failing_files`
+
+REQ-CKP-003 splits a regression failure two ways on a question of fact: are the failing
+tests inside `task.files_affected`? Inside → a Builder retry. Outside → FLAG HUMAN, because
+that is the Trade-B cross-task signal. The backend answers that question by **regexing the
+runner's stdout** — `FAILED tests/x.py::t`, `FAIL src/y.test.ts`, `z_test.go:12:`, a Rust
+panic line. Five patterns, four ecosystems, and any runner with a different output shape
+falls through all of them.
+
+The failure mode is contained by design rather than by luck: an empty tuple is documented
+as **unknown**, `RegressionResult.attributable` says which case you are in, and the
+`detail` string spells out that an unattributable failure must be flagged rather than
+retried. So the unsafe direction — auto-retrying a Builder against a breakage it cannot
+see — requires the *caller* to read an empty list as "nothing outside scope".
+
+*Why it matters:* the guard only holds if Task 18.1 actually branches on `attributable`.
+If it branches on `failing_files ⊆ files_affected` alone, an empty list satisfies the
+subset test vacuously and every unparseable failure silently becomes a Builder retry —
+the exact Trade-B violation REQ-CKP-003 AC1 exists to prevent. Recorded here so the task
+that writes that branch reads it first.
+
+### - [ ] G-034 — The regression gate's container has the live tree as its writable root
+**Severity:** MED · **Noticed:** Task 17.1 · **Closed by:** unassigned (accepted for now) ·
+**Where:** `saltcode_backend/saltcode/checkpoint/regression.py::run_regression`
+
+Every other gate runs on a disposable worktree, so a test that writes files damages a copy.
+The regression gate cannot: the question it answers is whether the *integrated* tree is
+healthy, and a sandbox copy is not the integrated tree. So `sandbox=workspace_path` — the
+project directory is the container's writable root, and a full suite with a destructive
+fixture can modify the live tree.
+
+Every other containment guarantee still holds: no network, no `$HOME`, no credentials,
+isolated PID namespace, memory/CPU/time ceilings, allowlisted command. What is given up is
+the read-only *project*, which is the same tradeoff `contained_exec` makes for interactive
+mode and is stated in both module docstrings rather than assumed.
+
+*Why it matters:* it is bounded — the tree is uncommitted at this point and the loop's
+response to a regression failure is `git reset --hard` to the last checkpoint anyway, so
+damage inside tracked files is already undone by the specified routing. Untracked files a
+runaway suite creates are not. Worth revisiting if a copy-on-write overlay ever becomes
+cheap enough to make the integrated tree and a disposable root the same thing.
+
+### - [ ] G-035 — A checkpoint commit never records `.saltcode/`
+**Severity:** LOW · **Noticed:** Task 17.2 · **Closed by:** unassigned (a deliberate
+default, recorded so it is visible) · **Where:**
+`saltcode_backend/saltcode/checkpoint/checkpoint.py::STAGE_PATHSPEC`
+
+`write_checkpoint` stages `.` with `:(exclude).saltcode`, so the sprint artifacts
+(`context_report.json`, `design.md`, `tasks.json`), the audit log and the checkpoint ledger
+never enter the project's git history.
+
+Taken deliberately, and the second reason is load-bearing: a ledger under version control is
+rewound by the very `git reset --hard` that reads it. The first end-to-end run of Task 17
+proved that — `git add -A` swept the ledger into the T2 commit, the rollback reset past it,
+and the whole checkpoint history vanished. `rollback` now also snapshots the ledger before
+resetting, so the fix holds even where some other tool tracks `.saltcode/`.
+
+*Why it matters:* someone expecting `git log` to show which plan a commit was built from
+will not find it. The plan lives in `.saltcode/` on disk and in the session store, not in
+history. If a project wants the artifacts versioned it commits them by hand — which is the
+right way round, since committing them on every checkpoint would put a churning directory
+in every diff a human reviews.
 
 ### - [x] G-030 — Two tasks both claim Saltnitor provider registration
 **Severity:** LOW · **Noticed:** Task 13.1 · **Closed:** 2026-08-11 ·

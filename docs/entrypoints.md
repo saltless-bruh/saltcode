@@ -11,7 +11,7 @@ That makes this document a **contract, not a description**: the extension's tool
 definitions are written against the argument names and JSON keys below, and a change here
 is a change to the bridge.
 
-Three invariants hold for all fourteen. They are asserted mechanically for every
+Three invariants hold for all seventeen. They are asserted mechanically for every
 entrypoint in `tests/test_task_7b_entrypoints.py`, which is what closes **G-006** —
 before it, the exit-code scheme was a convention that happened to hold.
 
@@ -69,7 +69,7 @@ routing signal in words where the exit code is the same in numbers.
 
 ---
 
-## The fourteen
+## The seventeen
 
 ### `validate_contract` — task 1.7
 Validate a typed contract against its pydantic model and the Output-Length Enforcer.
@@ -304,6 +304,96 @@ project directory, because a `write` the human asked for has to land in the proj
 other container guarantee is unchanged either way — no network, no `$HOME`, no
 credentials, isolated PID namespace, memory/CPU/time ceilings, auto-cleanup. What
 interactive mode gives up against Phase 2 is the read-only *project*, not containment.
+
+### `regression` — task 17.1
+The regression gate: the project's FULL suite on the **integrated live tree**, contained
+(REQ-CKP-002, design §10.1). Step 7 of the Phase-2 pipeline — after `apply_live` has
+landed the diff and left the tree uncommitted, before the checkpoint commit.
+
+| Argument | Required | Meaning |
+|---|---|---|
+| `--repo PATH` | no | The live working tree (default `.`). |
+| `--cmd STRING` | no | Overrides `[checkpoint] regression_cmd`. An **empty string forces a SKIP**. |
+| `--backend NAME` | no | Force a containment backend. |
+
+Payload: `{tool, ok, outcome, detail, output, command, backend, exit_code,
+limits_enforced, failing_files, attributable, checkpoint_regression}`.
+
+`outcome` is `pass | fail | skipped | unavailable`. Exit `0` for `pass` **and**
+`skipped`; `1` for `fail` and `unavailable`.
+
+Three keys carry the routing that REQ-CKP-003 needs:
+
+- **`checkpoint_regression`** is what to pass to `checkpoint --regression`. It maps
+  `skipped` and `unavailable` to `unverified`, so the two tools cannot disagree about
+  what a skip means.
+- **`failing_files`** is a *heuristic*. An empty list means **unknown**, never "nothing
+  outside scope" — REQ-CKP-003 AC1 routes an unattributable failure to FLAG HUMAN for the
+  same reason it routes an out-of-scope one there.
+- **`unavailable`** is not a red suite. A non-allowlisted `regression_cmd` or a runner
+  that is not installed means nothing ran; routing it as `fail` would send a Builder to
+  fix code that was never tested.
+
+Unlike every other gate, this one uses the **live tree as the container's writable root** —
+a sandbox copy is not the integrated tree, which is the whole question the gate answers.
+
+### `checkpoint` — task 17.2
+Commit the completed task and append its record (REQ-CKP-001, REQ-CKP-007). Step 8, the
+last of the pipeline.
+
+| Argument | Required | Meaning |
+|---|---|---|
+| `--repo PATH` | no | The live working tree (default `.`). |
+| `--task ID` | yes | The task this checkpoint closes. |
+| `--regression STATE` | no | `pass \| unverified \| fail` (default `unverified`). |
+| `--description TEXT` | no | Human summary; becomes the commit subject. |
+| `--sprint ID` | no | The sprint this task belongs to. |
+| `--stability FLOAT` | no | The Auditor's measured stability. |
+| `--in PATH \| -` | no | Gate results as a JSON object, recorded verbatim. |
+
+Payload: `{tool, ok, checkpoint, records_path, pushed, detail}`, where `checkpoint` is
+`{task_id, commit_sha, gate_results, stability, regression, timestamp, sprint_id,
+description}` — REQ-CKP-001 AC1's shape. Records append to
+`.saltcode/checkpoints.jsonl`.
+
+Exit `0` committed; **`1` refused on the evidence** — `--regression fail`, or nothing
+staged because the applied diff changed nothing. A refusal is the bar working, which is
+why it is exit 1 and not exit 3.
+
+Two deliberate absences: **it never pushes** (REQ-CKP-007, and there is no flag), and
+**it never commits `.saltcode/`** — the staging pathspec excludes it, so a checkpoint
+records the project's work rather than Saltcode's own bookkeeping.
+
+### `rollback` — task 17.3
+`git reset --hard <checkpoint_sha>`, ledger rewind, audit-log entry (REQ-CKP-009). The
+backend half of `/rollback last` and `/rollback <task_id>`.
+
+| Argument | Required | Meaning |
+|---|---|---|
+| `--repo PATH` | no | The live working tree (default `.`). |
+| `--to SELECTOR` | no | `last` (default) or a task id — resolved to its newest checkpoint. |
+| `--sprint ID` | no | Restrict the search to one sprint. |
+| `--force` | no | Proceed despite blocking dirty paths or a non-ancestor target. |
+
+Payload: `{tool, ok, selector, detail, target, head_before, head_after, dropped_commits,
+superseded_tasks, blocking_paths, saltcode_paths, untracked_paths, forced, warning}`.
+`warning` is present on **every** payload, refusal and success alike (AC2).
+
+Exit `0` reset; `1` refused — no matching checkpoint, blocking dirty paths without
+`--force`, a target that is not an ancestor of HEAD, or a `commit_sha` this repository
+has never seen (that last one is *not* forceable: it means the ledger and the repository
+disagree).
+
+**What blocks.** Not "is `git status` empty" — `git reset --hard` destroys tracked
+modifications and moves the branch but leaves untracked files alone, so the check is what
+the reset would actually destroy: tracked, uncommitted changes **outside** `.saltcode/`.
+Untracked files are reported as surviving; `.saltcode/` paths are Saltcode's own and never
+block. `--force` is the loop's normal path after a failed regression, where the extension
+knows the dirty tree is the uncommitted `apply_live` it is meant to discard.
+
+Superseded checkpoint records move to `.saltcode/checkpoints.rolled_back.jsonl` rather
+than being deleted, so `latest_record` stops returning a rolled-away commit (REQ-CKP-008)
+without losing the evidence that the work happened.
 
 ### `connectivity` — task 2.3
 The online/offline probe that selects the Phase-1 tier (REQ-MOD-003, design §12).

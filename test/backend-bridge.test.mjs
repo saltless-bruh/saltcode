@@ -204,6 +204,7 @@ test("the TOML subset reads the keys the extension actually uses", () => {
       "[checkpoint]",
       'auto_mode = "hybrid"',
       "auto_push = false",
+      'regression_cmd = "pytest -q"',
     ].join("\n"),
   );
 
@@ -215,6 +216,23 @@ test("the TOML subset reads the keys the extension actually uses", () => {
   assert.equal(c.mtpEnabled, true);
   assert.equal(c.autoMode, "hybrid");
   assert.equal(c.autoPush, false);
+  assert.equal(c.regressionCmd, "pytest -q");
+});
+
+test("regression_cmd is read from [checkpoint], where design §10.1 puts it", () => {
+  // The backend's `saltcode.tools.regression` reads `[checkpoint]`. This side used to
+  // read `[project]`, so the two halves disagreed about whether a project had a full
+  // suite configured at all — which is the difference between a real regression gate and
+  // a silent `regression: unverified` on every checkpoint.
+  const inProject = config.configFromToml(
+    config.parseTomlSubset('[project]\nregression_cmd = "pytest -q"'),
+  );
+  assert.equal(inProject.regressionCmd, undefined);
+
+  const inCheckpoint = config.configFromToml(
+    config.parseTomlSubset('[checkpoint]\nregression_cmd = "pytest -q"'),
+  );
+  assert.equal(inCheckpoint.regressionCmd, "pytest -q");
 });
 
 test("a `#` inside a string is not a comment", () => {

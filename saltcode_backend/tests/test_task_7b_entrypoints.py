@@ -1,9 +1,9 @@
 """Task 7b — the backend CLI contract, asserted for every entrypoint (REQ-EXT-004).
 
-The extension calls these thirteen modules with `pi.exec` and registers each as a Pi
+The extension calls these seventeen modules with `pi.exec` and registers each as a Pi
 tool, so the JSON-on-stdout shape and the exit-code scheme are a **contract**, not a
 convention that happens to hold. Before this file they were the latter: `docs/entrypoints.md`
-described the scheme and each task's own tests checked its own tool, so a fourteenth
+described the scheme and each task's own tests checked its own tool, so a new
 entrypoint could have shipped with a different idea of what exit 1 means and nothing
 would have noticed. That is **G-006**, and this file is what closes it.
 
@@ -45,14 +45,22 @@ ENTRYPOINTS: tuple[str, ...] = (
     "read_scoped",
     "connectivity",
     "contained_exec",
+    "regression",
+    "checkpoint",
+    "rollback",
 )
 """The roster from `specs/tasks.md` 7b.1, verbatim and in its order.
 
 `contained_exec` is the fourteenth, added 2026-08-11 for **G-029**: REQ-SEC-007 AC1 needs
 the built-in `write`/`edit`/`bash` routed through the container, and 7b.1's original list
 covered design §5.3's twelve LLM-facing tools plus `connectivity` — it had no reason to
-notice that the extension also needs an arbitrary contained command. It is held to every
-invariant here automatically, which is the point of parametrising over the roster."""
+notice that the extension also needs an arbitrary contained command.
+
+`regression`, `checkpoint` and `rollback` are the fifteenth to seventeenth, added
+2026-08-18 by **Task 17**. 7b.1 predates the checkpoint system reaching the backend, so
+its list stops at the Auditor; design §10.1's tail — regression gate, commit + record,
+`/rollback` — needs three more. All of them are held to every invariant here
+automatically, which is the point of parametrising over the roster."""
 
 VALID_EXIT_CODES = {EXIT_OK, EXIT_VERDICT_NEGATIVE, EXIT_USAGE, EXIT_ERROR}
 
@@ -89,11 +97,11 @@ def test_the_roster_matches_the_tools_package() -> None:
     )
 
 
-def test_the_roster_is_the_fourteen_entrypoint_names() -> None:
-    """7b.1 names thirteen; `contained_exec` is the fourteenth (G-029). Pinned so a
+def test_the_roster_is_the_seventeen_entrypoint_names() -> None:
+    """7b.1 names thirteen; +`contained_exec` (G-029) and +Task 17's three. Pinned so a
     silent drop — or a silent addition that skipped this file — is visible."""
-    assert len(ENTRYPOINTS) == 14
-    assert len(set(ENTRYPOINTS)) == 14
+    assert len(ENTRYPOINTS) == 17
+    assert len(set(ENTRYPOINTS)) == 17
 
 
 # ------------------------------------------------------- invariant 1: runnable at all
@@ -203,10 +211,13 @@ REQUIRED_ARG_PROBES: dict[str, tuple[str, ...]] = {
     "read_scoped": (),
     "connectivity": (),
     "contained_exec": (),
+    "regression": (),
+    "checkpoint": (),
+    "rollback": (),
 }
-"""Bare invocations. Tools with required arguments must refuse; the two that have none
-(`scope_probe`, `connectivity`) legitimately run, which is why this asserts the code is
-*valid* rather than that it is 2."""
+"""Bare invocations. Tools with required arguments must refuse; the ones that have none
+(`scope_probe`, `connectivity`, `regression`, `rollback`) legitimately run, which is why
+this asserts the code is *valid* rather than that it is 2."""
 
 
 @pytest.mark.parametrize("name", ENTRYPOINTS)
